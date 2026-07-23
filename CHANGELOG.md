@@ -9,6 +9,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- Initial Windows-first project structure.
-- Initial Telegram, App Server, and project configuration validation work.
-- Development automation, security policy, and project documentation.
+- Windows-first Go CLI skeleton for the Codex Telegram bridge.
+- Strict JSON configuration loading and validation for Telegram access, the
+  loopback Codex App Server, and allow-listed project directories.
+- Telegram bot token storage through Windows Credential Manager.
+- Development and release automation with Task and GoReleaser.
+- Security policy, implementation plan, and project documentation.
