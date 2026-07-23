@@ -1,0 +1,42 @@
+version: 2
+
+project_name: codex-tg
+
+builds:
+  - id: codex-tg
+    main: ./cmd/codex-tg
+    binary: codex-tg
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - windows
+    goarch:
+      - amd64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - ids:
+      - codex-tg
+    formats:
+      - zip
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+      - LICENSE
+      - CHANGELOG.md
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+changelog:
+  disable: true
+
+release:
+  github:
+    owner: Nergous
+    name: codex-tg

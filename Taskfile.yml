@@ -1,0 +1,101 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+vars:
+  ARTIFACTS_DIR: .artifacts
+  BUILD_DIR: '{{.ARTIFACTS_DIR}}/bin'
+  COVERAGE_DIR: '{{.ARTIFACTS_DIR}}/coverage'
+  COVERAGE_PROFILE: '{{.COVERAGE_DIR}}/coverage.out'
+  COVERAGE_HTML: '{{.COVERAGE_DIR}}/coverage.html'
+  BINARY: '{{.BUILD_DIR}}/codex-tg.exe'
+
+tasks:
+  default:
+    desc: List available tasks
+    cmds:
+      - task --list
+    silent: true
+
+  fmt:
+    desc: Format all Go source files
+    cmds:
+      - gofmt -w .
+
+  fmt-check:
+    desc: Check that all Go source files are formatted
+    cmds:
+      - |
+        files="$(gofmt -l .)" || exit $?
+        if [ -n "$files" ]; then
+          echo "Unformatted Go files:"
+          echo "$files"
+          exit 1
+        fi
+
+  tidy:
+    desc: Synchronize Go module dependencies
+    cmds:
+      - go mod tidy
+
+  test:
+    desc: Run all tests without using cached results
+    cmds:
+      - go test -count=1 ./...
+
+  test-race:
+    desc: Run all tests with the race detector
+    aliases: [race]
+    cmds:
+      - go test -race -count=1 ./...
+
+  coverage:
+    desc: Generate Go coverage profile and HTML report
+    aliases: [cover, cov]
+    cmds:
+      - mkdir -p "{{.COVERAGE_DIR}}"
+      - go test -count=1 -covermode=atomic -coverprofile="{{.COVERAGE_PROFILE}}" ./...
+      - go tool cover -func="{{.COVERAGE_PROFILE}}"
+      - go tool cover -html="{{.COVERAGE_PROFILE}}" -o "{{.COVERAGE_HTML}}"
+
+  vet:
+    desc: Run Go static analysis
+    cmds:
+      - go vet ./...
+
+  vuln:
+    desc: Check dependencies for known reachable vulnerabilities
+    cmds:
+      - govulncheck ./...
+
+  build:
+    desc: Build the Windows executable
+    cmds:
+      - mkdir -p "{{.BUILD_DIR}}"
+      - go build -trimpath -o "{{.BINARY}}" ./cmd/codex-tg
+
+  check:
+    desc: Run fast local verification
+    cmds:
+      - task: fmt-check
+      - task: vet
+      - task: test
+      - task: build
+
+  validate:
+    desc: Run complete local verification
+    cmds:
+      - task: check
+      - task: test-race
+      - task: vuln
+
+  version:
+    desc: Print version derived from Git tags and commit state
+    cmds:
+      - git describe --tags --always --dirty 2>/dev/null || echo dev
+    silent: true
+
+  clean:
+    desc: Remove generated artifacts
+    cmds:
+      - rm -rf "{{.ARTIFACTS_DIR}}"

@@ -1,0 +1,40 @@
+# Local agent files
+/.agents/
+/.codex/
+/docs/superpowers/
+AGENTS.md
+
+# Secrets and machine-local configuration
+.env
+.env.*
+!.env.example
+config.local.json
+*.local.json
+
+# Build, test, and coverage artifacts
+/.artifacts/
+/dist/
+/codex-tg
+/codex-tg.exe
+coverage.out
+coverage.html
+*.test
+
+# Runtime state
+*.db
+*.db-shm
+*.db-wal
+*.log
+/runtime/
+
+# Editors
+/.idea/
+/.vscode/
+*.swp
+*.swo
+*~
+
+# Operating systems
+.DS_Store
+Thumbs.db
+Desktop.ini
