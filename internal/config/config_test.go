@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Nergous/codex-tg/internal/project"
+	"github.com/Nergous/codex-tg/internal/models"
 )
 
 func TestConfig_Validate(t *testing.T) {
@@ -40,7 +40,7 @@ func TestConfig_Validate(t *testing.T) {
 			mutate: func(t *testing.T, cfg *Config) {
 				t.Helper()
 				secondRoot := t.TempDir()
-				cfg.Projects = append(cfg.Projects, project.Project{
+				cfg.Projects = append(cfg.Projects, models.Project{
 					Name: "demo",
 					Path: secondRoot,
 				})
@@ -111,7 +111,7 @@ func TestValidateProjects_ReturnsCanonicalPathError(t *testing.T) {
 	wantError := errors.New("canonical path failure")
 
 	err := validateProjectsWith(
-		[]project.Project{{Name: "demo", Path: "project"}},
+		[]models.Project{{Name: "demo", Path: "project"}},
 		func(string) (string, error) { return "", wantError },
 		isExist,
 	)
@@ -124,7 +124,7 @@ func TestValidateProjects_ReturnsStatError(t *testing.T) {
 	wantError := errors.New("stat failure")
 
 	err := validateProjectsWith(
-		[]project.Project{{Name: "demo", Path: "project"}},
+		[]models.Project{{Name: "demo", Path: "project"}},
 		func(path string) (string, error) { return path, nil },
 		func(string, error) (os.FileInfo, error) { return nil, wantError },
 	)
@@ -254,7 +254,7 @@ func validConfig(t *testing.T) *Config {
 			Listen:      "127.0.0.1:4500",
 			CodexBinary: codexBinary,
 		},
-		Projects: []project.Project{
+		Projects: []models.Project{
 			{
 				Name: "demo",
 				Path: root,

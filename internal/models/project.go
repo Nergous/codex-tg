@@ -1,8 +1,12 @@
-package config
+package models
 
-import "github.com/Nergous/codex-tg/internal/project"
+type Project struct {
+	Name    string
+	Path    string
+	Enabled bool
+}
 
-func isProjectsUnique(ps []project.Project) bool {
+func IsProjectsUnique(ps []Project) bool {
 	set := make(map[string]struct{}, len(ps))
 
 	for _, p := range ps {

@@ -4,13 +4,13 @@ import (
 	"encoding/json"
 	"os"
 
-	"github.com/Nergous/codex-tg/internal/project"
+	"github.com/Nergous/codex-tg/internal/models"
 )
 
 type Config struct {
-	Telegram  TelegramConfig    `json:"telegram"`
-	AppServer AppServerConfig   `json:"app_server"`
-	Projects  []project.Project `json:"projects"`
+	Telegram  TelegramConfig   `json:"telegram"`
+	AppServer AppServerConfig  `json:"app_server"`
+	Projects  []models.Project `json:"projects"`
 }
 
 func Load(path string) (*Config, error) {
@@ -64,16 +64,16 @@ func (cfg *Config) Validate() error {
 	return nil
 }
 
-func validateProjects(ps []project.Project) error {
+func validateProjects(ps []models.Project) error {
 	return validateProjectsWith(ps, canonicalPath, isExist)
 }
 
 func validateProjectsWith(
-	ps []project.Project,
+	ps []models.Project,
 	canonicalize func(string) (string, error),
 	stat func(string, error) (os.FileInfo, error),
 ) error {
-	if !isProjectsUnique(ps) {
+	if !models.IsProjectsUnique(ps) {
 		return ErrProjectsNotUnique
 	}
 
