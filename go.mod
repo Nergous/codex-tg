@@ -6,6 +6,7 @@ toolchain go1.26.4
 
 require (
 	github.com/danieljoos/wincred v1.2.3
+	github.com/coder/websocket v1.8.15
 	modernc.org/sqlite v1.54.0
 )
 
