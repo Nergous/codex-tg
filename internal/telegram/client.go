@@ -99,15 +99,19 @@ func (c *Client) GetUpdates(ctx context.Context, offset int64) ([]Update, error)
 	return out, nil
 }
 
-func (c *Client) Send(ctx context.Context, chatID int64, text string, keyboard *InlineKeyboard) (int64, error) {
-	request := struct {
-		ChatID      int64           `json:"chat_id"`
-		Text        string          `json:"text"`
-		ReplyMarkup *InlineKeyboard `json:"reply_markup,omitempty"`
-	}{
+type sendRequest struct {
+	ChatID      int64           `json:"chat_id"`
+	Text        string          `json:"text"`
+	ReplyMarkup *InlineKeyboard `json:"reply_markup,omitempty"`
+	ParseMode   string          `json:"parse_mode,omitempty"`
+}
+
+func (c *Client) Send(ctx context.Context, chatID int64, text string, keyboard *InlineKeyboard, opts MessageOptions) (int64, error) {
+	request := sendRequest{
 		ChatID:      chatID,
 		Text:        text,
 		ReplyMarkup: keyboard,
+		ParseMode:   opts.ParseMode,
 	}
 
 	var out struct {
@@ -119,17 +123,19 @@ func (c *Client) Send(ctx context.Context, chatID int64, text string, keyboard *
 	return out.MessageID, nil
 }
 
-func (c *Client) Edit(ctx context.Context, chatID, messageID int64, text string, keyboard *InlineKeyboard) error {
+func (c *Client) Edit(ctx context.Context, chatID, messageID int64, text string, keyboard *InlineKeyboard, opts MessageOptions) error {
 	request := struct {
 		ChatID      int64           `json:"chat_id"`
 		MessageID   int64           `json:"message_id"`
 		Text        string          `json:"text"`
 		ReplyMarkup *InlineKeyboard `json:"reply_markup,omitempty"`
+		ParseMode   string          `json:"parse_mode,omitempty"`
 	}{
 		ChatID:      chatID,
 		MessageID:   messageID,
 		Text:        text,
 		ReplyMarkup: keyboard,
+		ParseMode:   opts.ParseMode,
 	}
 	return c.call(ctx, "editMessageText", request, &struct{}{})
 }

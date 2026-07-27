@@ -88,7 +88,7 @@ func TestClient_NoRetryOnUnauthorized(t *testing.T) {
 	fake := testutil.NewFakeTelegram(t)
 	client := NewClient(fake.URL(), "wrong-token", fake.HTTPClient())
 
-	_, err := client.Send(context.Background(), 1, "ping", nil)
+	_, err := client.Send(context.Background(), 1, "ping", nil, MessageOptions{})
 	if !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("err = %v, want %v", err, ErrUnauthorized)
 	}
@@ -108,7 +108,7 @@ func TestClient_RetryOn5xx(t *testing.T) {
 	client.retryDelay = func() time.Duration { return 0 }
 	client.sleep = func(time.Duration) {}
 
-	messageID, err := client.Send(context.Background(), 1, "ping", nil)
+	messageID, err := client.Send(context.Background(), 1, "ping", nil, MessageOptions{})
 	if err != nil {
 		t.Fatalf("Send() error = %v", err)
 	}
@@ -127,7 +127,7 @@ func TestClient_MalformedResponse(t *testing.T) {
 	fake.EnqueueResponse("sendMessage", http.StatusOK, `invalid-json`)
 
 	client := NewClient(fake.URL(), fake.Token(), fake.HTTPClient())
-	_, err := client.Send(context.Background(), 1, "ping", nil)
+	_, err := client.Send(context.Background(), 1, "ping", nil, MessageOptions{})
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -143,7 +143,7 @@ func TestClient_RedactsTokenFromError(t *testing.T) {
 	secret := "super-secret-token-" + t.Name()
 	client := NewClient(fake.URL(), secret, fake.HTTPClient())
 
-	_, err := client.Send(context.Background(), 1, "ping", nil)
+	_, err := client.Send(context.Background(), 1, "ping", nil, MessageOptions{})
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -161,7 +161,7 @@ func TestClient_EditAndDelete(t *testing.T) {
 	fake := testutil.NewFakeTelegram(t)
 	client := NewClient(fake.URL(), fake.Token(), fake.HTTPClient())
 
-	if err := client.Edit(context.Background(), 1, 2, "updated", nil); err != nil {
+	if err := client.Edit(context.Background(), 1, 2, "updated", nil, MessageOptions{}); err != nil {
 		t.Fatalf("Edit() error = %v", err)
 	}
 	if err := client.DeleteWebhook(context.Background()); err != nil {
