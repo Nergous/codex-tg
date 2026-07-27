@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -11,8 +12,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Nergous/codex-tg/internal/approval"
 	"github.com/Nergous/codex-tg/internal/codex"
 	"github.com/Nergous/codex-tg/internal/models"
+	"github.com/Nergous/codex-tg/internal/state"
 )
 
 const (
@@ -30,6 +33,15 @@ type Messenger interface {
 	Send(ctx context.Context, chatID int64, text string, keyboard *InlineKeyboard, opts MessageOptions) (int64, error)
 	Edit(ctx context.Context, chatID, messageID int64, text string, keyboard *InlineKeyboard, opts MessageOptions) error
 	AnswerCallback(ctx context.Context, callbackID, text string) error
+}
+
+type ApprovalService interface {
+	Request(ctx context.Context, req approval.Request) (string, error)
+	Resolve(ctx context.Context, chatID int64, nonce string, decision approval.Decision) error
+}
+
+type ApprovalResponder interface {
+	Respond(ctx context.Context, requestID json.RawMessage, result any) error
 }
 
 type Coordinator interface {
@@ -53,20 +65,26 @@ type Handler struct {
 	botName       string
 	now           func() time.Time
 
+	approvalService   ApprovalService
+	approvalResponder ApprovalResponder
+
 	mu sync.Mutex
 
 	states        map[int64]*chatState
+	threadChats   map[string]int64
 	callbacks     map[string]callbackPayload
 	unlockSecrets map[string]unlockState
 }
 
 type HandlerOptions struct {
-	Coordinator   Coordinator
-	Messenger     Messenger
-	AllowedUserID int64
-	AllowedChatID int64
-	BotName       string
-	Now           func() time.Time
+	Coordinator       Coordinator
+	Messenger         Messenger
+	AllowedUserID     int64
+	AllowedChatID     int64
+	BotName           string
+	Now               func() time.Time
+	ApprovalService   ApprovalService
+	ApprovalResponder ApprovalResponder
 }
 
 type chatState struct {
@@ -76,11 +94,14 @@ type chatState struct {
 }
 
 type callbackPayload struct {
-	action    string
-	project   string
-	threadID  string
-	expiresAt time.Time
-	createdAt time.Time
+	action            string
+	project           string
+	threadID          string
+	expiresAt         time.Time
+	createdAt         time.Time
+	chatID            int64
+	approvalNonce     string
+	approvalRequestID json.RawMessage
 }
 
 type unlockState struct {
@@ -94,17 +115,20 @@ func NewHandler(opts HandlerOptions) *Handler {
 		now = time.Now
 	}
 	return &Handler{
-		coordinator:   opts.Coordinator,
-		messenger:     opts.Messenger,
-		allowedUserID: opts.AllowedUserID,
-		allowedChatID: opts.AllowedChatID,
-		botName:       opts.BotName,
-		now:           now,
+		coordinator:       opts.Coordinator,
+		messenger:         opts.Messenger,
+		allowedUserID:     opts.AllowedUserID,
+		allowedChatID:     opts.AllowedChatID,
+		botName:           opts.BotName,
+		now:               now,
+		approvalService:   opts.ApprovalService,
+		approvalResponder: opts.ApprovalResponder,
 		renderer: NewRenderer(RendererOptions{
 			Messenger: opts.Messenger,
 			Now:       now,
 		}),
 		states:        map[int64]*chatState{},
+		threadChats:   map[string]int64{},
 		callbacks:     map[string]callbackPayload{},
 		unlockSecrets: map[string]unlockState{},
 	}
@@ -224,6 +248,12 @@ func (h *Handler) handleCallback(ctx context.Context, chatID int64, callback *Ca
 	}
 
 	switch payload.action {
+	case "approval_approve":
+		return h.handleApprovalCallback(ctx, payload, approval.ApproveOnce)
+	case "approval_deny":
+		return h.handleApprovalCallback(ctx, payload, approval.Deny)
+	case "approval_cancel":
+		return h.handleApprovalCallback(ctx, payload, approval.CancelTask)
 	case "select_project":
 		session, err := h.coordinator.OpenProject(ctx, payload.project, false)
 		if err != nil {
@@ -533,7 +563,153 @@ func (h *Handler) OnEvent(ctx context.Context, event codex.Event) error {
 	if h.renderer == nil {
 		return nil
 	}
+	if h.isApprovalMethod(event.Method) {
+		return h.handleApprovalEvent(ctx, event)
+	}
 	return h.renderer.OnEvent(ctx, event)
+}
+
+func (h *Handler) isApprovalMethod(method string) bool {
+	return method == "approval/request" || strings.HasSuffix(method, "/requestApproval")
+}
+
+func (h *Handler) handleApprovalEvent(ctx context.Context, event codex.Event) error {
+	if h.approvalService == nil || h.approvalResponder == nil {
+		return nil
+	}
+	if len(event.RequestID) == 0 {
+		return nil
+	}
+
+	chatID := h.threadChat(event.ThreadID)
+	if chatID == 0 {
+		return nil
+	}
+
+	var payload struct {
+		Kind    string `json:"kind"`
+		Summary string `json:"summary"`
+		Text    string `json:"text"`
+	}
+	_ = json.Unmarshal(event.Raw, &payload)
+
+	summary := firstNonEmpty(strings.TrimSpace(payload.Summary), strings.TrimSpace(payload.Text), strings.TrimSpace(event.Text))
+	if summary == "" {
+		summary = "approval requested"
+	}
+
+	kind := firstNonEmpty(payload.Kind, "approval")
+	reqID := append(json.RawMessage(nil), event.RequestID...)
+
+	nonce, err := h.approvalService.Request(ctx, approval.Request{
+		ChatID:   chatID,
+		ThreadID: event.ThreadID,
+		RPCID:    reqID,
+		Kind:     kind,
+		Summary:  summary,
+	})
+	if err != nil {
+		return h.notify(ctx, chatID, "cannot create approval request")
+	}
+
+	approveToken := h.issueCallback()
+	denyToken := h.issueCallback()
+	cancelToken := h.issueCallback()
+	if approveToken == "" || denyToken == "" || cancelToken == "" {
+		return h.notify(ctx, chatID, "cannot prepare approval")
+	}
+
+	now := h.now()
+	expiresAt := now.Add(callbackTokenLifetime)
+	h.withCallback(approveToken, callbackPayload{
+		action:            "approval_approve",
+		threadID:          event.ThreadID,
+		chatID:            chatID,
+		approvalNonce:     nonce,
+		approvalRequestID: reqID,
+		expiresAt:         expiresAt,
+		createdAt:         now,
+	})
+	h.withCallback(denyToken, callbackPayload{
+		action:            "approval_deny",
+		threadID:          event.ThreadID,
+		chatID:            chatID,
+		approvalNonce:     nonce,
+		approvalRequestID: reqID,
+		expiresAt:         expiresAt,
+		createdAt:         now,
+	})
+	h.withCallback(cancelToken, callbackPayload{
+		action:            "approval_cancel",
+		threadID:          event.ThreadID,
+		chatID:            chatID,
+		approvalNonce:     nonce,
+		approvalRequestID: reqID,
+		expiresAt:         expiresAt,
+		createdAt:         now,
+	})
+
+	return h.send(ctx, chatID, "approval requested: "+summary, &InlineKeyboard{
+		InlineKeyboard: [][]InlineKeyboardButton{
+			{
+				{Text: "Approve", CallbackData: approveToken},
+				{Text: "Deny", CallbackData: denyToken},
+				{Text: "Cancel", CallbackData: cancelToken},
+			},
+		},
+	})
+}
+
+func (h *Handler) handleApprovalCallback(ctx context.Context, payload callbackPayload, decision approval.Decision) error {
+	if payload.chatID == 0 {
+		return nil
+	}
+
+	if h.approvalService == nil || h.approvalResponder == nil {
+		return h.notify(ctx, payload.chatID, "approval unavailable")
+	}
+	if err := h.approvalService.Resolve(ctx, payload.chatID, payload.approvalNonce, decision); err != nil {
+		switch {
+		case errors.Is(err, state.ErrAlreadyResolved):
+			return h.notify(ctx, payload.chatID, "approval already handled")
+		case errors.Is(err, state.ErrUnauthorized):
+			return h.notify(ctx, payload.chatID, "approval unauthorized")
+		case errors.Is(err, state.ErrExpired):
+			return h.notify(ctx, payload.chatID, "approval expired")
+		default:
+			return h.notify(ctx, payload.chatID, "cannot resolve approval")
+		}
+	}
+
+	result := map[string]any{
+		"decision": approvalDecisionForResponse(decision),
+	}
+	if err := h.approvalResponder.Respond(ctx, payload.approvalRequestID, result); err != nil {
+		return h.notify(ctx, payload.chatID, "cannot send approval response")
+	}
+	return h.notify(ctx, payload.chatID, "approval responded")
+}
+
+func approvalDecisionForResponse(decision approval.Decision) string {
+	switch decision {
+	case approval.CancelTask:
+		return "cancel"
+	case approval.Deny:
+		return "decline"
+	case approval.ApproveOnce:
+		return "accept"
+	default:
+		return "decline"
+	}
+}
+
+func (h *Handler) threadChat(threadID string) int64 {
+	if threadID == "" {
+		return 0
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.threadChats[threadID]
 }
 
 func (h *Handler) isAuthorized(update Update, chatID int64) bool {
@@ -665,10 +841,20 @@ func (h *Handler) bindRenderer(chatID int64, threadID string) {
 	if threadID == "" {
 		return
 	}
+	h.setThreadChat(threadID, chatID)
 	state := h.state(chatID)
 	if h.renderer != nil {
 		h.renderer.SetThread(chatID, threadID, state.project)
 	}
+}
+
+func (h *Handler) setThreadChat(threadID string, chatID int64) {
+	if threadID == "" || chatID == 0 {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.threadChats[threadID] = chatID
 }
 
 func isCallbackAllowed(callback *CallbackQuery) bool {

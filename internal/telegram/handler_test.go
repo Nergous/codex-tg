@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"regexp"
 	"strings"
@@ -9,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Nergous/codex-tg/internal/approval"
+	"github.com/Nergous/codex-tg/internal/codex"
 	"github.com/Nergous/codex-tg/internal/models"
 )
 
@@ -44,6 +47,122 @@ type submitCall struct {
 type recentCall struct {
 	project string
 	limit   int
+}
+
+type fakeApprovalService struct {
+	mu         sync.Mutex
+	requests   []fakeApprovalRequest
+	resolves   []fakeApprovalResolve
+	nextNonce  string
+	requestErr error
+	resolveErr error
+}
+
+type fakeApprovalRequest struct {
+	chatID    int64
+	threadID  string
+	kind      string
+	summary   string
+	requestID string
+}
+
+type fakeApprovalResolve struct {
+	chatID   int64
+	nonce    string
+	decision approval.Decision
+}
+
+func (f *fakeApprovalService) Request(_ context.Context, req approval.Request) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.requestErr != nil {
+		return "", f.requestErr
+	}
+
+	nonce := f.nextNonce
+	if nonce == "" {
+		nonce = "nonce-1"
+	}
+	f.nextNonce = ""
+	f.requests = append(f.requests, fakeApprovalRequest{
+		chatID:    req.ChatID,
+		threadID:  req.ThreadID,
+		kind:      req.Kind,
+		summary:   req.Summary,
+		requestID: string(req.RPCID),
+	})
+	return nonce, nil
+}
+
+func (f *fakeApprovalService) requestCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.requests)
+}
+
+func (f *fakeApprovalService) lastRequest() fakeApprovalRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.requests) == 0 {
+		return fakeApprovalRequest{}
+	}
+	return f.requests[len(f.requests)-1]
+}
+
+func (f *fakeApprovalService) lastResolve() fakeApprovalResolve {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.resolves) == 0 {
+		return fakeApprovalResolve{}
+	}
+	return f.resolves[len(f.resolves)-1]
+}
+
+func (f *fakeApprovalService) Resolve(_ context.Context, chatID int64, nonce string, decision approval.Decision) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.resolves = append(f.resolves, fakeApprovalResolve{
+		chatID:   chatID,
+		nonce:    nonce,
+		decision: decision,
+	})
+	return f.resolveErr
+}
+
+type fakeApprovalResponder struct {
+	mu      sync.Mutex
+	calls   []approvalResponse
+	respErr error
+}
+
+type approvalResponse struct {
+	requestID string
+	result    any
+}
+
+func (f *fakeApprovalResponder) Respond(_ context.Context, requestID json.RawMessage, result any) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, approvalResponse{
+		requestID: string(requestID),
+		result:    result,
+	})
+	return f.respErr
+}
+
+func (f *fakeApprovalResponder) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.calls)
+}
+
+func (f *fakeApprovalResponder) lastCall() approvalResponse {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.calls) == 0 {
+		return approvalResponse{}
+	}
+	return f.calls[len(f.calls)-1]
 }
 
 func (f *fakeCoordinator) ListProjects(context.Context) ([]models.Project, error) {
@@ -191,6 +310,16 @@ func (f *fakeMessenger) lastSendText() string {
 
 func newFixture(t *testing.T, allowedUserID, allowedChatID int64) (*Handler, *fakeCoordinator, *fakeMessenger, *time.Time) {
 	t.Helper()
+	return newFixtureWithApprovals(t, allowedUserID, allowedChatID, nil, nil)
+}
+
+func newFixtureWithApprovals(
+	t *testing.T,
+	allowedUserID, allowedChatID int64,
+	approvalService ApprovalService,
+	approvalResponder ApprovalResponder,
+) (*Handler, *fakeCoordinator, *fakeMessenger, *time.Time) {
+	t.Helper()
 
 	coordinator := &fakeCoordinator{
 		projects: []models.Project{
@@ -201,11 +330,13 @@ func newFixture(t *testing.T, allowedUserID, allowedChatID int64) (*Handler, *fa
 	messenger := &fakeMessenger{}
 	now := time.Now()
 	handler := NewHandler(HandlerOptions{
-		Coordinator:   coordinator,
-		Messenger:     messenger,
-		AllowedUserID: allowedUserID,
-		AllowedChatID: allowedChatID,
-		BotName:       "bot",
+		Coordinator:       coordinator,
+		Messenger:         messenger,
+		AllowedUserID:     allowedUserID,
+		AllowedChatID:     allowedChatID,
+		BotName:           "bot",
+		ApprovalService:   approvalService,
+		ApprovalResponder: approvalResponder,
 		Now: func() time.Time {
 			return now
 		},
@@ -237,6 +368,29 @@ func callbackUpdate(chatID, fromID int64, data string) Update {
 			},
 		},
 	}
+}
+
+func approvalRequestEvent(threadID, turnID string, requestID json.RawMessage, summary string) codex.Event {
+	return codex.Event{
+		Method:    "approval/request",
+		ThreadID:  threadID,
+		TurnID:    turnID,
+		RequestID: requestID,
+		Raw: mustMarshal(map[string]any{
+			"threadId": threadID,
+			"turnId":   turnID,
+			"kind":     "command",
+			"summary":  summary,
+		}),
+	}
+}
+
+func mustMarshal(v any) json.RawMessage {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return raw
 }
 
 func TestHandlerSilentlyIgnoresUnauthorizedAndGroupUpdates(t *testing.T) {
@@ -587,5 +741,86 @@ func TestHandlerDiffFullPatchExecutesFullDiff(t *testing.T) {
 	}
 	if got := msg.text; got != "diff --patch" {
 		t.Fatalf("message = %q, want %q", got, "diff --patch")
+	}
+}
+
+func TestOnEventApprovalRequestSendsInlineChoices(t *testing.T) {
+	t.Parallel()
+	service := &fakeApprovalService{nextNonce: "nonce-approve"}
+	responder := &fakeApprovalResponder{}
+	handler, _, messenger, _ := newFixtureWithApprovals(t, 100, 200, service, responder)
+
+	handler.bindRenderer(200, "thr-1")
+
+	if err := handler.OnEvent(context.Background(), approvalRequestEvent("thr-1", "turn-1", json.RawMessage(`"srv-1"`), "rm -rf /tmp")); err != nil {
+		t.Fatalf("OnEvent() error = %v", err)
+	}
+
+	if got := service.requestCount(); got != 1 {
+		t.Fatalf("approval service requests = %d, want 1", got)
+	}
+	lastRequest := service.lastRequest()
+	if lastRequest.chatID != 200 {
+		t.Fatalf("request chat = %d, want 200", lastRequest.chatID)
+	}
+	if lastRequest.requestID != "\"srv-1\"" {
+		t.Fatalf("requestID = %q, want %q", lastRequest.requestID, "\"srv-1\"")
+	}
+
+	send := messenger.lastSend()
+	if send.keyboard == nil {
+		t.Fatal("expected approval keyboard")
+	}
+	if len(send.keyboard.InlineKeyboard) != 1 || len(send.keyboard.InlineKeyboard[0]) != 3 {
+		t.Fatalf("approval keyboard = %#v", send.keyboard.InlineKeyboard)
+	}
+	if send.keyboard.InlineKeyboard[0][0].CallbackData == "" || send.keyboard.InlineKeyboard[0][1].CallbackData == "" || send.keyboard.InlineKeyboard[0][2].CallbackData == "" {
+		t.Fatal("expected callback data for every approval action")
+	}
+}
+
+func TestApprovalCallbackResolvesAndResponds(t *testing.T) {
+	t.Parallel()
+	service := &fakeApprovalService{nextNonce: "nonce-deny"}
+	responder := &fakeApprovalResponder{}
+	handler, _, messenger, _ := newFixtureWithApprovals(t, 100, 200, service, responder)
+	handler.bindRenderer(200, "thr-1")
+
+	if err := handler.OnEvent(context.Background(), approvalRequestEvent("thr-1", "turn-1", json.RawMessage(`"srv-2"`), "cat /etc/passwd")); err != nil {
+		t.Fatalf("OnEvent() error = %v", err)
+	}
+
+	send := messenger.lastSend()
+	if len(send.keyboard.InlineKeyboard) == 0 || len(send.keyboard.InlineKeyboard[0]) < 2 {
+		t.Fatal("missing deny callback")
+	}
+	denyToken := send.keyboard.InlineKeyboard[0][1].CallbackData
+	if err := handler.Handle(context.Background(), callbackUpdate(200, 100, denyToken)); err != nil {
+		t.Fatalf("callback error = %v", err)
+	}
+
+	resolved := service.lastResolve()
+	if resolved.chatID != 200 {
+		t.Fatalf("resolved chat = %d, want 200", resolved.chatID)
+	}
+	if resolved.nonce != "nonce-deny" {
+		t.Fatalf("resolved nonce = %q, want %q", resolved.nonce, "nonce-deny")
+	}
+	if resolved.decision != approval.Deny {
+		t.Fatalf("resolved decision = %q, want %q", resolved.decision, approval.Deny)
+	}
+	if responder.callCount() != 1 {
+		t.Fatalf("responder calls = %d, want 1", responder.callCount())
+	}
+	lastCall := responder.lastCall()
+	if lastCall.requestID != "\"srv-2\"" {
+		t.Fatalf("responder requestID = %q, want %q", lastCall.requestID, "\"srv-2\"")
+	}
+	gotResult, ok := lastCall.result.(map[string]any)
+	if !ok {
+		t.Fatalf("responder result type = %T, want map", lastCall.result)
+	}
+	if gotResult["decision"] != "decline" {
+		t.Fatalf("decision = %v, want decline", gotResult["decision"])
 	}
 }
