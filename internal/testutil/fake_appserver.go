@@ -25,13 +25,6 @@ type FakeAppServer struct {
 	connSet chan struct{}
 }
 
-type TestingT interface {
-	Helper()
-	Cleanup(func())
-	FailNow()
-	Fatalf(format string, args ...any)
-}
-
 type scriptFrame struct {
 	ID     any             `json:"id"`
 	Method string          `json:"method,omitempty"`
