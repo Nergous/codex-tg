@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 )
 
 type Client struct {
@@ -22,7 +24,12 @@ func NewClient(baseURL, token string) *Client {
 	}
 }
 
+var errEmptyIPCClientConfig = errors.New("missing ipc client configuration")
+
 func (c *Client) Open(ctx context.Context, req OpenRequest) (OpenResponse, error) {
+	if err := c.validate(); err != nil {
+		return OpenResponse{}, err
+	}
 	var out OpenResponse
 	if err := c.call(ctx, http.MethodPost, openPath, req, &out); err != nil {
 		return OpenResponse{}, err
@@ -31,6 +38,9 @@ func (c *Client) Open(ctx context.Context, req OpenRequest) (OpenResponse, error
 }
 
 func (c *Client) Status(ctx context.Context) (StatusResponse, error) {
+	if err := c.validate(); err != nil {
+		return StatusResponse{}, err
+	}
 	var out StatusResponse
 	if err := c.call(ctx, http.MethodGet, statusPath, nil, &out); err != nil {
 		return StatusResponse{}, err
@@ -39,7 +49,17 @@ func (c *Client) Status(ctx context.Context) (StatusResponse, error) {
 }
 
 func (c *Client) Stop(ctx context.Context) error {
+	if err := c.validate(); err != nil {
+		return err
+	}
 	return c.call(ctx, http.MethodPost, stopPath, nil, &struct{}{})
+}
+
+func (c *Client) validate() error {
+	if strings.TrimSpace(c.baseURL) == "" || strings.TrimSpace(c.token) == "" {
+		return errEmptyIPCClientConfig
+	}
+	return nil
 }
 
 func (c *Client) call(ctx context.Context, method, path string, in any, out any) error {

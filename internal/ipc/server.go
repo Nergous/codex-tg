@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"net"
 	"net/http"
 	"strings"
@@ -108,8 +109,8 @@ func (s *Server) handleOpen(w http.ResponseWriter, r *http.Request) {
 		respondError(w, badRequest("invalid request body"))
 		return
 	}
-	if strings.TrimSpace(req.ProjectPath) == "" {
-		respondError(w, badRequest("project path is required"))
+	if err := validateOpenRequest(req); err != nil {
+		respondError(w, err)
 		return
 	}
 
@@ -178,6 +179,28 @@ func isLoopbackAddress(remoteAddr string) bool {
 	}
 	ip := net.ParseIP(strings.TrimSpace(host))
 	return ip != nil && ip.IsLoopback()
+}
+
+func validateOpenRequest(req OpenRequest) error {
+	path := strings.TrimSpace(req.ProjectPath)
+	if path == "" {
+		return badRequest("project path is required")
+	}
+	if strings.Contains(path, "\x00") {
+		return badRequest("project path is invalid")
+	}
+	if !filepath.IsAbs(path) {
+		return badRequest("project path must be absolute")
+	}
+	cleaned := filepath.Clean(path)
+	slashed := strings.ReplaceAll(cleaned, "\\", "/")
+	if strings.Contains(slashed, "/../") || strings.HasSuffix(slashed, "/..") {
+		return badRequest("project path is invalid")
+	}
+	if !filepath.IsAbs(cleaned) {
+		return badRequest("project path is invalid")
+	}
+	return nil
 }
 
 func ensureMethod(w http.ResponseWriter, r *http.Request, want string) error {

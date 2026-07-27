@@ -155,6 +155,14 @@ func (c *Client) DeleteWebhook(ctx context.Context) error {
 	return c.call(ctx, "deleteWebhook", map[string]bool{}, &struct{}{})
 }
 
+func (c *Client) GetMe(ctx context.Context) (User, error) {
+	var out User
+	if err := c.call(ctx, "getMe", map[string]bool{}, &out); err != nil {
+		return User{}, err
+	}
+	return out, nil
+}
+
 func (c *Client) call(ctx context.Context, route string, payload any, out any) error {
 	for {
 		if ctx.Err() != nil {

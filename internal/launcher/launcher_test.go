@@ -2,6 +2,7 @@ package launcher
 
 import (
 	"context"
+	"errors"
 	"os"
 	"slices"
 	"strings"
@@ -80,5 +81,19 @@ func TestLauncherRunInjectsTokenInEnvNotArgs(t *testing.T) {
 
 	if got := os.Getenv("CODEX_TG_REMOTE_TOKEN"); got != "" && got == token {
 		t.Fatalf("token leaked into current process env: %q", got)
+	}
+}
+
+func TestLauncherRunRejectsMissingTokenAndRelativePath(t *testing.T) {
+	t.Parallel()
+
+	l := New(`C:\tools\codex.exe`, "ws://127.0.0.1:4500")
+	if err := l.Run(context.Background(), `repo\relative`, "thr-1", "secret"); !errors.Is(err, ErrInvalidLauncherConfig) {
+		t.Fatalf("Run(relative cwd) error = %v, want invalid launcher config", err)
+	}
+
+	l.TokenEnv = ""
+	if err := l.Run(context.Background(), `D:\repo`, "thr-1", "secret"); !errors.Is(err, ErrInvalidLauncherConfig) {
+		t.Fatalf("Run(empty token env) error = %v", err)
 	}
 }

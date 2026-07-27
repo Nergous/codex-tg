@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 )
 
 const defaultTokenEnv = "CODEX_TG_REMOTE_TOKEN"
@@ -43,8 +45,17 @@ func (l Launcher) Run(ctx context.Context, cwd, threadID, token string) error {
 	if l.CodexBinary == "" {
 		return ErrInvalidLauncherConfig
 	}
+	if strings.TrimSpace(cwd) == "" {
+		return fmt.Errorf("%w: cwd", ErrInvalidLauncherConfig)
+	}
+	if !filepath.IsAbs(cwd) {
+		return fmt.Errorf("%w: cwd", ErrInvalidLauncherConfig)
+	}
 	if l.TokenEnv == "" {
 		return ErrInvalidLauncherConfig
+	}
+	if strings.TrimSpace(token) == "" {
+		return fmt.Errorf("%w: token", ErrInvalidLauncherConfig)
 	}
 	if threadID == "" {
 		return fmt.Errorf("%w: thread id", ErrInvalidLauncherConfig)

@@ -81,6 +81,28 @@ func TestServerRejectsUnauthorizedAndOrigin(t *testing.T) {
 	}
 }
 
+func TestServerRejectsInvalidProjectPath(t *testing.T) {
+	t.Parallel()
+
+	service := &fakeService{
+		open: OpenResponse{ThreadID: "thr-2", Endpoint: "ws://127.0.0.1:4500", Token: "tok"},
+	}
+	server := NewServer(service, "local-token")
+	addr, err := server.Start(context.Background())
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+
+	client := NewClient(addr, "local-token")
+	if _, err := client.Open(context.Background(), OpenRequest{ProjectPath: "/tmp/../repo", NewSession: true}); err == nil {
+		t.Fatal("expected relative path rejection")
+	}
+	if service.openCalls != 0 {
+		t.Fatalf("open calls = %d, want 0", service.openCalls)
+	}
+}
+
 func TestServerRequiresLoopbackPeer(t *testing.T) {
 	// This test asserts loopback detection directly, avoiding network stack dependence.
 	t.Parallel()
@@ -97,9 +119,11 @@ type fakeService struct {
 	status    StatusResponse
 	openErr   error
 	stopCalls int
+	openCalls int
 }
 
 func (f *fakeService) Open(context.Context, OpenRequest) (OpenResponse, error) {
+	f.openCalls++
 	return f.open, f.openErr
 }
 

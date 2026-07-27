@@ -170,6 +170,9 @@ func (r *Renderer) OnEvent(ctx context.Context, event codex.Event) error {
 	case "item/agentMessage/delta", "item/completed":
 		state.AssistantRaw = appendAssistantText(state.AssistantRaw, text)
 	case "turn/completed", "turn/failed", "turn/interrupted", "turn/faulted":
+		if text != "" {
+			state.AssistantRaw = appendAssistantText(state.AssistantRaw, text)
+		}
 		state.Done = true
 	case "item/started":
 		if text != "" && state.Activity == "" {
@@ -180,7 +183,7 @@ func (r *Renderer) OnEvent(ctx context.Context, event codex.Event) error {
 	r.mu.Unlock()
 
 	if state.Done {
-		return r.finalize(ctx, state)
+		return r.finalize(ctx, state, event.Method)
 	}
 	if visible {
 		return r.sendProgress(ctx, state, now, false)
@@ -212,7 +215,7 @@ func (r *Renderer) ensureTurnState(threadID, turnID string, now time.Time) *rend
 	return state
 }
 
-func (r *Renderer) finalize(ctx context.Context, state *renderState) error {
+func (r *Renderer) finalize(ctx context.Context, state *renderState, method string) error {
 	if state == nil || state.ChatID == 0 {
 		r.mu.Lock()
 		if state != nil {
@@ -222,9 +225,23 @@ func (r *Renderer) finalize(ctx context.Context, state *renderState) error {
 		return nil
 	}
 
-	response := string(state.AssistantRaw)
+	response := strings.TrimSpace(string(state.AssistantRaw))
 	if response == "" {
-		response = "turn completed"
+		switch method {
+		case "turn/completed":
+			response = "turn completed"
+		case "turn/failed":
+			response = "turn failed"
+		case "turn/interrupted":
+			response = "turn interrupted"
+		case "turn/faulted":
+			response = "turn faulted"
+		default:
+			response = "turn completed"
+		}
+		if state.Activity != "" {
+			response = response + ": " + state.Activity
+		}
 	}
 
 	if err := sendWithMarkdownFallback(ctx, r.messenger, state.ChatID, response, nil, MessageOptions{}, defaultFinalChunkBytes); err != nil {

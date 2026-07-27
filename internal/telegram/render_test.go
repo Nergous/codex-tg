@@ -255,3 +255,26 @@ func TestRendererFallsBackToPlainTextOnMarkdownParseError(t *testing.T) {
 		t.Fatalf("fallback payload = %q, want %q", plain.text, "first")
 	}
 }
+
+func TestRendererUsesTerminalFallbackWhenNoAgentText(t *testing.T) {
+	now := time.Now()
+	messenger := &renderFakeMessenger{}
+	r := NewRenderer(RendererOptions{
+		Messenger:      messenger,
+		Now:            func() time.Time { return now },
+		HeartbeatDelay: 24 * time.Hour,
+	})
+	r.SetThread(1001, "thr-1", "/repo/demo")
+
+	if err := r.OnEvent(context.Background(), testEvent("turn/failed", "thr-1", "turn-1", `{}`)); err != nil {
+		t.Fatalf("turn/failed error = %v", err)
+	}
+
+	sendCalls := messenger.snapshotSends()
+	if len(sendCalls) != 1 {
+		t.Fatalf("send calls = %d, want 1", len(sendCalls))
+	}
+	if sendCalls[0].text != "turn failed" {
+		t.Fatalf("final response = %q, want %q", sendCalls[0].text, "turn failed")
+	}
+}

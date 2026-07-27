@@ -24,6 +24,11 @@ const (
 	callbackTokenLifetime = 10 * time.Minute
 )
 
+const commandHelpText = `unknown command.
+available commands:
+/status, /projects, /project <name>, /new, /resume [thread], /sessions [thread],
+/diff [full], /cancel, /lock, /unlock <token>, /queue`
+
 var (
 	errNoProject    = errors.New("no project configured")
 	errInvalidNonce = errors.New("invalid nonce")
@@ -147,7 +152,7 @@ func (h *Handler) Handle(ctx context.Context, update Update) error {
 		return h.handleMessage(ctx, chatID, update.Message)
 	}
 	if update.CallbackQuery != nil {
-		if state := h.state(chatID); state.locked && !isCallbackAllowed(update.CallbackQuery) {
+		if state := h.state(chatID); state.locked && !h.isCallbackAllowed(update.CallbackQuery) {
 			return h.replyLocked(ctx, chatID)
 		}
 		return h.handleCallback(ctx, chatID, update.CallbackQuery)
@@ -235,8 +240,10 @@ func (h *Handler) processCommand(ctx context.Context, chatID int64, command stri
 			return h.notify(ctx, chatID, "use /unlock <token>")
 		}
 		return h.unlock(ctx, chatID, strings.TrimSpace(args[0]))
+	case "help":
+		return h.notify(ctx, chatID, commandHelpText)
 	default:
-		return h.notify(ctx, chatID, "unknown command")
+		return h.notify(ctx, chatID, commandHelpText)
 	}
 }
 
@@ -598,8 +605,13 @@ func (h *Handler) handleApprovalEvent(ctx context.Context, event codex.Event) er
 		summary = "approval requested"
 	}
 
-	kind := firstNonEmpty(payload.Kind, "approval")
+	kind := firstNonEmpty(payload.Kind, strings.TrimPrefix(event.Method, "item/"), "approval")
+	normalizedKind := normalizeApprovalKind(kind)
+	if !isSupportedApprovalKind(normalizedKind) {
+		return h.notify(ctx, chatID, "unsupported approval request")
+	}
 	reqID := append(json.RawMessage(nil), event.RequestID...)
+	risky := isHighRiskApproval(normalizedKind, summary, payload.Text)
 
 	nonce, err := h.approvalService.Request(ctx, approval.Request{
 		ChatID:   chatID,
@@ -615,21 +627,23 @@ func (h *Handler) handleApprovalEvent(ctx context.Context, event codex.Event) er
 	approveToken := h.issueCallback()
 	denyToken := h.issueCallback()
 	cancelToken := h.issueCallback()
-	if approveToken == "" || denyToken == "" || cancelToken == "" {
+	if denyToken == "" || cancelToken == "" || (!risky && approveToken == "") {
 		return h.notify(ctx, chatID, "cannot prepare approval")
 	}
 
 	now := h.now()
 	expiresAt := now.Add(callbackTokenLifetime)
-	h.withCallback(approveToken, callbackPayload{
-		action:            "approval_approve",
-		threadID:          event.ThreadID,
-		chatID:            chatID,
-		approvalNonce:     nonce,
-		approvalRequestID: reqID,
-		expiresAt:         expiresAt,
-		createdAt:         now,
-	})
+	if !risky {
+		h.withCallback(approveToken, callbackPayload{
+			action:            "approval_approve",
+			threadID:          event.ThreadID,
+			chatID:            chatID,
+			approvalNonce:     nonce,
+			approvalRequestID: reqID,
+			expiresAt:         expiresAt,
+			createdAt:         now,
+		})
+	}
 	h.withCallback(denyToken, callbackPayload{
 		action:            "approval_deny",
 		threadID:          event.ThreadID,
@@ -649,14 +663,13 @@ func (h *Handler) handleApprovalEvent(ctx context.Context, event codex.Event) er
 		createdAt:         now,
 	})
 
+	controls := [][]InlineKeyboardButton{{{Text: "Deny", CallbackData: denyToken}, {Text: "Cancel", CallbackData: cancelToken}}}
+	if !risky {
+		controls[0] = append([]InlineKeyboardButton{{Text: "Approve", CallbackData: approveToken}}, controls[0]...)
+	}
+
 	return h.send(ctx, chatID, "approval requested: "+summary, &InlineKeyboard{
-		InlineKeyboard: [][]InlineKeyboardButton{
-			{
-				{Text: "Approve", CallbackData: approveToken},
-				{Text: "Deny", CallbackData: denyToken},
-				{Text: "Cancel", CallbackData: cancelToken},
-			},
-		},
+		InlineKeyboard: controls,
 	})
 }
 
@@ -857,9 +870,74 @@ func (h *Handler) setThreadChat(threadID string, chatID int64) {
 	h.threadChats[threadID] = chatID
 }
 
-func isCallbackAllowed(callback *CallbackQuery) bool {
-	_ = callback
-	return false
+func (h *Handler) isCallbackAllowed(callback *CallbackQuery) bool {
+	if callback == nil || callback.Message == nil {
+		return false
+	}
+	if callback.Message.Chat.Type != "private" || callback.Data == "" {
+		return false
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	payload, ok := h.callbacks[callback.Data]
+	if !ok {
+		return false
+	}
+	if payload.expiresAt.Before(h.now()) {
+		delete(h.callbacks, callback.Data)
+		return false
+	}
+	if payload.chatID != 0 && payload.chatID != callback.Message.Chat.ID {
+		return false
+	}
+	return true
+}
+
+func normalizeApprovalKind(kind string) string {
+	kind = strings.ToLower(strings.TrimSpace(strings.TrimPrefix(kind, "item/")))
+	kind = strings.ReplaceAll(kind, "-", "")
+	kind = strings.ReplaceAll(kind, "_", "")
+	return strings.ReplaceAll(kind, "/", "")
+}
+
+func isSupportedApprovalKind(kind string) bool {
+	switch kind {
+	case "approval", "requestapproval", "command", "commandexecution", "filechange", "permission", "mcpelicitation", "approvalrequest":
+		return true
+	default:
+		return false
+	}
+}
+
+func isHighRiskApproval(kind, summary, requestText string) bool {
+	haystack := strings.ToLower(strings.TrimSpace(kind + " " + summary + " " + requestText))
+	if haystack == "" {
+		return false
+	}
+
+	riskyWords := []string{
+		"commit", "push", "publish", "deploy", "migration", "migrate",
+		"rm -rf", "rm -r ", "rm -f", "rmdir", "del ", "delete ", "mv ", "cp ", "chmod ", "chown ",
+		"credential", "token", "password", "access key", "secret", "api key", "private key",
+		"sudo", "dd ", "mkfs",
+		"git push", "git commit", "git rebase", "git reset", "git clean", "git stash drop", "drop ", "database",
+		"../", "..\\",
+		"mysql://", "postgres://", "postgresql://", "sqlite://", "redis://", "mongodb://",
+		"scp ", "rsync ", "ftp://", "ssh ", "curl ", "wget ", "bash -c", "powershell", "cmd /c", "format ",
+		"/etc/", "/var/", "rm -rf /",
+	}
+
+	for _, word := range riskyWords {
+		if strings.Contains(haystack, word) {
+			return true
+		}
+	}
+
+	return strings.Contains(haystack, "C:\\") ||
+		strings.Contains(haystack, "D:\\") ||
+		strings.Contains(haystack, "E:\\") ||
+		strings.Contains(haystack, "F:\\")
 }
 
 func parseCommand(text, botName string) (string, []string, bool, bool) {

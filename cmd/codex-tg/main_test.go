@@ -17,7 +17,7 @@ func TestRunNotArguments(t *testing.T) {
 }
 
 func TestRunRecognizesCommands(t *testing.T) {
-	for _, command := range []string{"setup", "serve", "open", "project", "status", "autostart"} {
+	for _, command := range []string{"setup", "serve", "project", "status", "autostart"} {
 		t.Run(command, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 			if code := run([]string{command}, &stdout, &stderr); code != exitError {
@@ -27,6 +27,17 @@ func TestRunRecognizesCommands(t *testing.T) {
 				t.Fatalf("stderr = %q", stderr.String())
 			}
 		})
+	}
+}
+
+func TestRunOpenRequiresConfig(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"open"}, &stdout, &stderr); code != exitError {
+		t.Fatalf("run() code = %d, want %d", code, exitError)
+	}
+	if !strings.Contains(stderr.String(), "usage: open [--new] <project_path>") &&
+		!strings.Contains(stderr.String(), "missing CODEX_TG_IPC_TOKEN") {
+		t.Fatalf("stderr = %q", stderr.String())
 	}
 }
 

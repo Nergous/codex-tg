@@ -385,6 +385,23 @@ func approvalRequestEvent(threadID, turnID string, requestID json.RawMessage, su
 	}
 }
 
+func approvalRequestEventWithKind(threadID, turnID string, requestID json.RawMessage, kind, summary, text string) codex.Event {
+	payload := map[string]any{
+		"kind":    kind,
+		"summary": summary,
+	}
+	if text != "" {
+		payload["text"] = text
+	}
+	return codex.Event{
+		Method:    "approval/request",
+		ThreadID:  threadID,
+		TurnID:    turnID,
+		RequestID: requestID,
+		Raw:       mustMarshal(payload),
+	}
+}
+
 func mustMarshal(v any) json.RawMessage {
 	raw, err := json.Marshal(v)
 	if err != nil {
@@ -479,8 +496,26 @@ func TestUnknownCommandSendsHelp(t *testing.T) {
 
 	messenger.mu.Lock()
 	defer messenger.mu.Unlock()
-	if len(messenger.sends) == 0 || !strings.Contains(messenger.sends[0].text, "unknown command") {
+	if len(messenger.sends) == 0 || !strings.Contains(messenger.sends[0].text, "available commands") {
 		t.Fatalf("unexpected response = %#v", messenger.sends)
+	}
+}
+
+func TestHelpCommandSendsCommandsList(t *testing.T) {
+	t.Parallel()
+	handler, _, messenger, _ := newFixture(t, 100, 200)
+
+	if err := handler.Handle(context.Background(), messageUpdate(100, 200, "private", "/help")); err != nil {
+		t.Fatalf("Handle() error = %v", err)
+	}
+
+	messenger.mu.Lock()
+	defer messenger.mu.Unlock()
+	if len(messenger.sends) == 0 {
+		t.Fatalf("no response for /help")
+	}
+	if !strings.Contains(messenger.sends[0].text, "/status") || !strings.Contains(messenger.sends[0].text, "/unlock <token>") {
+		t.Fatalf("help payload = %#v", messenger.sends[0].text)
 	}
 }
 
@@ -752,7 +787,7 @@ func TestOnEventApprovalRequestSendsInlineChoices(t *testing.T) {
 
 	handler.bindRenderer(200, "thr-1")
 
-	if err := handler.OnEvent(context.Background(), approvalRequestEvent("thr-1", "turn-1", json.RawMessage(`"srv-1"`), "rm -rf /tmp")); err != nil {
+	if err := handler.OnEvent(context.Background(), approvalRequestEvent("thr-1", "turn-1", json.RawMessage(`"srv-1"`), "show project status")); err != nil {
 		t.Fatalf("OnEvent() error = %v", err)
 	}
 
@@ -779,6 +814,56 @@ func TestOnEventApprovalRequestSendsInlineChoices(t *testing.T) {
 	}
 }
 
+func TestOnEventHighRiskApprovalOffersNoApprove(t *testing.T) {
+	t.Parallel()
+	service := &fakeApprovalService{nextNonce: "nonce-high-risk"}
+	responder := &fakeApprovalResponder{}
+	handler, _, messenger, _ := newFixtureWithApprovals(t, 100, 200, service, responder)
+
+	handler.bindRenderer(200, "thr-1")
+
+	if err := handler.OnEvent(context.Background(), approvalRequestEventWithKind("thr-1", "turn-1", json.RawMessage(`"srv-hr"`), "command", "git push origin main", "")); err != nil {
+		t.Fatalf("OnEvent() error = %v", err)
+	}
+
+	if got := service.requestCount(); got != 1 {
+		t.Fatalf("approval service requests = %d, want 1", got)
+	}
+
+	send := messenger.lastSend()
+	if send.keyboard == nil {
+		t.Fatal("expected approval keyboard")
+	}
+	if len(send.keyboard.InlineKeyboard) != 1 || len(send.keyboard.InlineKeyboard[0]) != 2 {
+		t.Fatalf("approval keyboard = %#v", send.keyboard.InlineKeyboard)
+	}
+	if send.keyboard.InlineKeyboard[0][0].Text != "Deny" || send.keyboard.InlineKeyboard[0][1].Text != "Cancel" {
+		t.Fatalf("unexpected high risk approval buttons: %#v", send.keyboard.InlineKeyboard[0])
+	}
+}
+
+func TestOnEventRejectsUnsupportedApprovalKind(t *testing.T) {
+	t.Parallel()
+	service := &fakeApprovalService{nextNonce: "nonce-unsupported"}
+	responder := &fakeApprovalResponder{}
+	handler, _, messenger, _ := newFixtureWithApprovals(t, 100, 200, service, responder)
+
+	handler.bindRenderer(200, "thr-1")
+
+	if err := handler.OnEvent(context.Background(), approvalRequestEventWithKind("thr-1", "turn-1", json.RawMessage(`"srv-unsupported"`), "mystery", "do something", "")); err != nil {
+		t.Fatalf("OnEvent() error = %v", err)
+	}
+
+	if got := service.requestCount(); got != 0 {
+		t.Fatalf("approval service requests = %d, want 0", got)
+	}
+
+	send := messenger.lastSend()
+	if send.text == "" || !strings.Contains(send.text, "unsupported approval request") {
+		t.Fatalf("unexpected response = %#v", send.text)
+	}
+}
+
 func TestApprovalCallbackResolvesAndResponds(t *testing.T) {
 	t.Parallel()
 	service := &fakeApprovalService{nextNonce: "nonce-deny"}
@@ -794,7 +879,7 @@ func TestApprovalCallbackResolvesAndResponds(t *testing.T) {
 	if len(send.keyboard.InlineKeyboard) == 0 || len(send.keyboard.InlineKeyboard[0]) < 2 {
 		t.Fatal("missing deny callback")
 	}
-	denyToken := send.keyboard.InlineKeyboard[0][1].CallbackData
+	denyToken := send.keyboard.InlineKeyboard[0][0].CallbackData
 	if err := handler.Handle(context.Background(), callbackUpdate(200, 100, denyToken)); err != nil {
 		t.Fatalf("callback error = %v", err)
 	}
@@ -822,5 +907,32 @@ func TestApprovalCallbackResolvesAndResponds(t *testing.T) {
 	}
 	if gotResult["decision"] != "decline" {
 		t.Fatalf("decision = %v, want decline", gotResult["decision"])
+	}
+}
+
+func TestCallbackRejectedWhenTokenBoundToDifferentChat(t *testing.T) {
+	t.Parallel()
+	handler, coord, _, _ := newFixture(t, 100, 200)
+
+	if err := handler.Handle(context.Background(), messageUpdate(100, 200, "private", "/lock")); err != nil {
+		t.Fatalf("Handle() error = %v", err)
+	}
+
+	marker := handler.issueCallback()
+	handler.withCallback(marker, callbackPayload{
+		action:    "new_confirm",
+		expiresAt: time.Now().Add(10 * time.Minute),
+		createdAt: time.Now(),
+		chatID:    999,
+	})
+
+	if err := handler.Handle(context.Background(), callbackUpdate(200, 100, marker)); err != nil {
+		t.Fatalf("Handle() error = %v", err)
+	}
+
+	coord.mu.Lock()
+	defer coord.mu.Unlock()
+	if len(coord.openCalls) != 0 || len(coord.submitCalls) != 0 {
+		t.Fatalf("unexpected coordinator calls for mismatched callback: open=%d submit=%d", len(coord.openCalls), len(coord.submitCalls))
 	}
 }

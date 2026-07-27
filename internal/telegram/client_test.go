@@ -174,3 +174,22 @@ func TestClient_EditAndDelete(t *testing.T) {
 		t.Fatalf("deleteWebhook calls = %d, want 1", fake.Calls("deleteWebhook"))
 	}
 }
+
+func TestClient_GetMe(t *testing.T) {
+	t.Parallel()
+
+	fake := testutil.NewFakeTelegram(t)
+	fake.EnqueueResponse("getMe", http.StatusOK, `{"ok":true,"result":{"id":321,"username":"bot"}}`)
+
+	client := NewClient(fake.URL(), fake.Token(), fake.HTTPClient())
+	me, err := client.GetMe(context.Background())
+	if err != nil {
+		t.Fatalf("GetMe() error = %v", err)
+	}
+	if me.ID != 321 || me.Username != "bot" {
+		t.Fatalf("GetMe() = %+v, want id 321 username bot", me)
+	}
+	if fake.Calls("getMe") != 1 {
+		t.Fatalf("getMe calls = %d, want 1", fake.Calls("getMe"))
+	}
+}
