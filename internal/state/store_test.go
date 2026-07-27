@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/Nergous/codex-tg/internal/models"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -14,25 +15,25 @@ var testDatabaseID atomic.Uint64
 
 func TestOpen_FreshDatabaseAppliesMigrations(t *testing.T) {
 	store := openTestStore(t)
+	db := store.db
 
 	var version int
-	if err := store.db.QueryRow(`SELECT version FROM schema_version`).Scan(&version); err != nil {
+	if err := db.QueryRow(`SELECT version FROM schema_version`).Scan(&version); err != nil {
 		t.Fatalf("read schema version: %v", err)
 	}
 	if version != 1 {
 		t.Fatalf("schema version = %d, want 1", version)
 	}
 
-	var projectsTableCount int
-	if err := store.db.QueryRow(`
-		SELECT count(*)
-		FROM sqlite_schema
-		WHERE type = 'table' AND name = 'projects'
-	`).Scan(&projectsTableCount); err != nil {
-		t.Fatalf("find projects table: %v", err)
-	}
-	if projectsTableCount != 1 {
-		t.Fatalf("projects table count = %d, want 1", projectsTableCount)
+	for _, table := range []string{
+		"schema_version",
+		"projects",
+		"sessions",
+		"queued_messages",
+		"bot_state",
+		"approvals",
+	} {
+		assertTableCount(t, db, table, 1)
 	}
 }
 
@@ -57,6 +58,48 @@ func TestOpen_CurrentDatabaseDoesNotReapplyMigrations(t *testing.T) {
 			t.Errorf("close second store: %v", err)
 		}
 	})
+
+	const projectPath = "/project/persist"
+	if _, err := first.db.Exec(`
+		INSERT INTO projects (path, name, enabled) VALUES (?, 'persisted', 1)
+	`, projectPath); err != nil {
+		t.Fatalf("seed data in first open: %v", err)
+	}
+	if _, err := second.db.Exec(`
+		INSERT INTO sessions (thread_id, project_path, active, updated_at)
+		VALUES ('thread-old', ?, 1, 1)
+	`, projectPath); err != nil {
+		t.Fatalf("seed session state in second open: %v", err)
+	}
+
+	third, err := Open(context.Background(), dsn)
+	if err != nil {
+		t.Fatalf("open current database third time: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := third.Close(); err != nil {
+			t.Errorf("close third store: %v", err)
+		}
+	})
+
+	var projectRows int
+	if err := third.db.QueryRow(`
+		SELECT count(*) FROM projects WHERE path = ?
+	`, projectPath).Scan(&projectRows); err != nil {
+		t.Fatalf("read project after reopen: %v", err)
+	}
+	if projectRows != 1 {
+		t.Fatalf("project rows after reopen = %d, want 1", projectRows)
+	}
+	var activeSessions int
+	if err := third.db.QueryRow(`
+		SELECT count(*) FROM sessions WHERE project_path = ? AND active = 1
+	`, projectPath).Scan(&activeSessions); err != nil {
+		t.Fatalf("read sessions after reopen: %v", err)
+	}
+	if activeSessions != 1 {
+		t.Fatalf("active sessions after reopen = %d, want 1", activeSessions)
+	}
 }
 
 func TestOpen_RejectsNewerSchemaVersion(t *testing.T) {
@@ -76,6 +119,13 @@ func TestOpen_RejectsNewerSchemaVersion(t *testing.T) {
 	}
 	if !errors.Is(err, ErrUnsupportedSchemaVersion) {
 		t.Fatalf("Open() error = %v, want ErrUnsupportedSchemaVersion", err)
+	}
+	var version int
+	if err := db.QueryRow(`SELECT version FROM schema_version`).Scan(&version); err != nil {
+		t.Fatalf("read unchanged schema version: %v", err)
+	}
+	if version != 2 {
+		t.Fatalf("schema version = %d, want 2", version)
 	}
 }
 
@@ -166,6 +216,37 @@ func TestOpen_EnforcesForeignKeysOnPooledConnections(t *testing.T) {
 		if err == nil {
 			t.Fatalf("connection %d accepted a foreign-key violation", i)
 		}
+	}
+}
+
+func TestSetActiveSession_LeavesSingleActiveSessionPerProject(t *testing.T) {
+	store := openTestStore(t)
+	if _, err := store.db.Exec(`
+		INSERT INTO projects (path, name, enabled)
+		VALUES ('/project/one', 'one', 1);
+		INSERT INTO sessions (thread_id, project_path, active, updated_at) VALUES
+			('thread-1', '/project/one', 1, 1),
+			('thread-2', '/project/one', 0, 2),
+			('thread-3', '/project/one', 0, 3);
+	`); err != nil {
+		t.Fatalf("prepare sessions: %v", err)
+	}
+
+	if err := store.SetActiveSession(context.Background(), &models.Session{
+		ProjectPath: "/project/one",
+		ThreadID:    "thread-3",
+	}); err != nil {
+		t.Fatalf("SetActiveSession() error = %v", err)
+	}
+
+	var activeCount int
+	if err := store.db.QueryRow(`
+		SELECT count(*) FROM sessions WHERE project_path = '/project/one' AND active = 1
+	`).Scan(&activeCount); err != nil {
+		t.Fatalf("count active sessions: %v", err)
+	}
+	if activeCount != 1 {
+		t.Fatalf("active session count = %d, want 1", activeCount)
 	}
 }
 

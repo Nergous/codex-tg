@@ -2,9 +2,11 @@ package state
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Nergous/codex-tg/internal/models"
 )
@@ -498,6 +500,168 @@ func TestQueue_EnqueueErrorDoesNotExposePrompt(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), prompt) {
 		t.Fatalf("Enqueue() error exposes prompt: %v", err)
+	}
+}
+
+func TestApproval_CreateAndResolve(t *testing.T) {
+	store := openTestStore(t)
+	approval := &models.Approval{
+		Nonce:     "nonce-create-resolve",
+		RequestID: "request-1",
+		ThreadID:  "thread-1",
+		ChatID:    200,
+		Kind:      "command",
+		ExpiresAt: time.Now().Add(5 * time.Minute).Unix(),
+	}
+
+	if err := store.CreateApproval(context.Background(), approval); err != nil {
+		t.Fatalf("CreateApproval() error = %v", err)
+	}
+
+	var resolved int
+	var decision sql.NullString
+	if err := store.db.QueryRow(`
+		SELECT resolved, decision FROM approvals WHERE nonce = ?
+	`, approval.Nonce).Scan(&resolved, &decision); err != nil {
+		t.Fatalf("query approval: %v", err)
+	}
+	if resolved != 0 {
+		t.Fatalf("approval resolved = %d, want 0", resolved)
+	}
+	if decision.Valid {
+		t.Fatalf("approval decision = %q, want NULL", decision.String)
+	}
+
+	if err := store.ResolveApproval(context.Background(), 200, approval.Nonce, "approve"); err != nil {
+		t.Fatalf("ResolveApproval() error = %v", err)
+	}
+
+	if err := store.db.QueryRow(`
+		SELECT resolved, decision
+		FROM approvals
+		WHERE nonce = ?
+	`, approval.Nonce).Scan(&resolved, &decision); err != nil {
+		t.Fatalf("query approval after resolve: %v", err)
+	}
+	if resolved != 1 {
+		t.Fatalf("approval resolved = %d, want 1", resolved)
+	}
+	if !decision.Valid || decision.String != "approve" {
+		t.Fatalf("approval decision = %v, want approve", decision)
+	}
+}
+
+func TestApproval_UnauthorizedResolveReturnsErrUnauthorized(t *testing.T) {
+	store := openTestStore(t)
+	approval := &models.Approval{
+		Nonce:     "nonce-unauthorized",
+		RequestID: "request-2",
+		ThreadID:  "thread-2",
+		ChatID:    200,
+		Kind:      "command",
+		ExpiresAt: time.Now().Add(5 * time.Minute).Unix(),
+	}
+	if err := store.CreateApproval(context.Background(), approval); err != nil {
+		t.Fatalf("CreateApproval() error = %v", err)
+	}
+
+	err := store.ResolveApproval(context.Background(), 201, approval.Nonce, "approve")
+	if !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("ResolveApproval() error = %v, want ErrUnauthorized", err)
+	}
+}
+
+func TestApproval_ExpiredResolveReturnsErrExpired(t *testing.T) {
+	store := openTestStore(t)
+	approval := &models.Approval{
+		Nonce:     "nonce-expired",
+		RequestID: "request-3",
+		ThreadID:  "thread-3",
+		ChatID:    200,
+		Kind:      "command",
+		ExpiresAt: time.Now().Add(-time.Minute).Unix(),
+	}
+	if err := store.CreateApproval(context.Background(), approval); err != nil {
+		t.Fatalf("CreateApproval() error = %v", err)
+	}
+
+	err := store.ResolveApproval(context.Background(), 200, approval.Nonce, "approve")
+	if !errors.Is(err, ErrExpired) {
+		t.Fatalf("ResolveApproval() error = %v, want ErrExpired", err)
+	}
+}
+
+func TestApproval_ResolveRequiresSingleUse(t *testing.T) {
+	store := openTestStore(t)
+	approval := &models.Approval{
+		Nonce:     "nonce-single-use",
+		RequestID: "request-4",
+		ThreadID:  "thread-4",
+		ChatID:    200,
+		Kind:      "command",
+		ExpiresAt: time.Now().Add(5 * time.Minute).Unix(),
+	}
+	if err := store.CreateApproval(context.Background(), approval); err != nil {
+		t.Fatalf("CreateApproval() error = %v", err)
+	}
+
+	if err := store.ResolveApproval(context.Background(), 200, approval.Nonce, "approve"); err != nil {
+		t.Fatalf("first ResolveApproval() error = %v", err)
+	}
+	if err := store.ResolveApproval(context.Background(), 200, approval.Nonce, "approve"); !errors.Is(err, ErrAlreadyResolved) {
+		t.Fatalf("second ResolveApproval() error = %v, want ErrAlreadyResolved", err)
+	}
+}
+
+func TestApproval_ConcurrentResolveAllowsSingleSuccess(t *testing.T) {
+	store := openTestStore(t)
+	approval := &models.Approval{
+		Nonce:     "nonce-race",
+		RequestID: "request-5",
+		ThreadID:  "thread-5",
+		ChatID:    200,
+		Kind:      "command",
+		ExpiresAt: time.Now().Add(5 * time.Minute).Unix(),
+	}
+	if err := store.CreateApproval(context.Background(), approval); err != nil {
+		t.Fatalf("CreateApproval() error = %v", err)
+	}
+
+	result := make(chan error, 2)
+	for _, decision := range []string{"approve", "deny"} {
+		go func(decision string) {
+			result <- store.ResolveApproval(context.Background(), 200, approval.Nonce, decision)
+		}(decision)
+	}
+
+	successes := 0
+	alreadyResolved := 0
+	for range 2 {
+		switch err := <-result; {
+		case err == nil:
+			successes++
+		case errors.Is(err, ErrAlreadyResolved):
+			alreadyResolved++
+		default:
+			t.Fatalf("ResolveApproval() error = %v", err)
+		}
+	}
+	if successes != 1 || alreadyResolved != 1 {
+		t.Fatalf("concurrent resolves: successes=%d alreadyResolved=%d, want 1 and 1", successes, alreadyResolved)
+	}
+
+	var resolved int
+	var decision sql.NullString
+	if err := store.db.QueryRow(`
+		SELECT resolved, decision FROM approvals WHERE nonce = ?
+	`, approval.Nonce).Scan(&resolved, &decision); err != nil {
+		t.Fatalf("query resolved approval: %v", err)
+	}
+	if resolved != 1 {
+		t.Fatalf("approval resolved = %d, want 1", resolved)
+	}
+	if !decision.Valid {
+		t.Fatal("approval decision is NULL, want one of the concurrent decisions")
 	}
 }
 

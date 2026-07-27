@@ -14,6 +14,9 @@ import (
 
 var ErrNotFound = errors.New("state not found")
 var ErrQueueEmpty = errors.New("queue empty")
+var ErrAlreadyResolved = errors.New("approval already resolved")
+var ErrUnauthorized = errors.New("approval unauthorized")
+var ErrExpired = errors.New("approval expired")
 
 const updateOffsetKey = "telegram_update_offset"
 
@@ -58,6 +61,22 @@ const (
 		ON CONFLICT(key) DO UPDATE SET value = excluded.value
 	`
 	selectUpdateOffsetQuery = `SELECT value FROM bot_state WHERE key = ?`
+
+	createApprovalQuery = `
+		INSERT INTO approvals (
+			nonce, request_id, thread_id, chat_id, kind, expires_at
+		) VALUES (?, ?, ?, ?, ?, ?)
+	`
+	selectApprovalQuery = `
+		SELECT chat_id, resolved, expires_at
+		FROM approvals
+		WHERE nonce = ?
+	`
+	resolveApprovalQuery = `
+		UPDATE approvals
+		SET resolved = 1, decision = ?
+		WHERE nonce = ? AND resolved = 0 AND chat_id = ? AND expires_at > ?
+	`
 )
 
 func (s *Store) PutProject(ctx context.Context, p *models.Project) error {
@@ -278,4 +297,115 @@ func (s *Store) UpdateOffset(ctx context.Context) (int64, error) {
 		return 0, fmt.Errorf("load update offset: %w", err)
 	}
 	return offset, nil
+}
+
+func (s *Store) CreateApproval(ctx context.Context, approval *models.Approval) error {
+	if approval == nil {
+		return fmt.Errorf("create approval: nil approval")
+	}
+
+	res, err := s.db.ExecContext(
+		ctx,
+		createApprovalQuery,
+		approval.Nonce,
+		approval.RequestID,
+		approval.ThreadID,
+		approval.ChatID,
+		approval.Kind,
+		approval.ExpiresAt,
+	)
+	if err != nil {
+		return fmt.Errorf("create approval: %w", err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("create approval rows affected: %w", err)
+	}
+	if rows != 1 {
+		return fmt.Errorf("create approval: inserted %d rows, want 1", rows)
+	}
+	return nil
+}
+
+func (s *Store) ResolveApproval(ctx context.Context, chatID int64, nonce, decision string) (err error) {
+	deadline := time.Now().Add(sqliteLockRetryTimeout)
+	delay := time.Millisecond
+	for {
+		err = s.resolveApprovalOnce(ctx, chatID, nonce, decision)
+		if err == nil || !isSQLiteLockError(err) {
+			return err
+		}
+		if time.Now().After(deadline) {
+			return err
+		}
+
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("resolve approval: wait for lock: %w", ctx.Err())
+		case <-timer.C:
+		}
+		if delay < maxSQLiteLockRetryDelay {
+			delay *= 2
+		}
+	}
+}
+
+func (s *Store) resolveApprovalOnce(ctx context.Context, chatID int64, nonce, decision string) (err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("resolve approval: begin transaction: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	var dbChatID int64
+	var resolved int
+	var expiresAt int64
+	if err = tx.QueryRowContext(ctx, selectApprovalQuery, nonce).Scan(&dbChatID, &resolved, &expiresAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("resolve approval: %w", ErrNotFound)
+		}
+		return fmt.Errorf("resolve approval: read current state: %w", err)
+	}
+
+	now := time.Now().Unix()
+	res, err := tx.ExecContext(
+		ctx,
+		resolveApprovalQuery,
+		decision,
+		nonce,
+		chatID,
+		now,
+	)
+	if err != nil {
+		return fmt.Errorf("resolve approval: update: %w", err)
+	}
+
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("resolve approval: rows affected: %w", err)
+	}
+	if rows == 0 {
+		var reason error
+		if dbChatID != chatID {
+			reason = ErrUnauthorized
+		} else if expiresAt <= now {
+			reason = ErrExpired
+		} else if resolved != 0 {
+			reason = ErrAlreadyResolved
+		} else {
+			reason = ErrAlreadyResolved
+		}
+		return reason
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("resolve approval: commit: %w", err)
+	}
+	return nil
 }
