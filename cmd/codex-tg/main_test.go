@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,23 +12,55 @@ import (
 	"github.com/Nergous/codex-tg/internal/codex"
 )
 
-func TestRunNotArguments(t *testing.T) {
+func TestRunNoArgumentsDispatchesPrimaryFlow(t *testing.T) {
+	original := primaryFlow
+	t.Cleanup(func() { primaryFlow = original })
+	called := false
+	primaryFlow = func() error { called = true; return nil }
 	var stdout, stderr bytes.Buffer
-	if code := run([]string{}, &stdout, &stderr); code != exitUsage {
+	if code := run([]string{}, &stdout, &stderr); code != exitOK {
 		t.Fatalf("run() code = %d, want %d", code, exitOK)
 	}
-	if !strings.Contains(stderr.String(), "usage:") {
-		t.Fatalf("stdout = %q, stderr = %q", stdout.String(), stderr.String())
+	if !called || stderr.Len() != 0 {
+		t.Fatalf("called=%t stderr=%q", called, stderr.String())
+	}
+}
+
+func TestRunOpenDefaultsToCurrentDirectory(t *testing.T) {
+	working := t.TempDir()
+	originalGetwd := getwd
+	t.Cleanup(func() { getwd = originalGetwd })
+	getwd = func() (string, error) { return working, nil }
+	originalEnsure := ensureRuntime
+	t.Cleanup(func() { ensureRuntime = originalEnsure })
+	ensureRuntime = func(context.Context) (app.RuntimeInfo, error) {
+		return app.RuntimeInfo{}, errors.New("runtime unavailable")
+	}
+
+	// Runtime loading happens after path validation; missing runtime proves omitted
+	// path was accepted and resolved instead of returning usage.
+	t.Setenv("LOCALAPPDATA", t.TempDir())
+	err := runOpen(nil)
+	if err == nil || strings.Contains(err.Error(), "usage: open") {
+		t.Fatalf("err=%v", err)
 	}
 }
 
 func TestRunOpenRequiresConfig(t *testing.T) {
+	t.Setenv("LOCALAPPDATA", t.TempDir())
+	t.Setenv("CODEX_TG_IPC_URL", "")
+	t.Setenv("CODEX_TG_IPC_TOKEN", "")
+	t.Setenv("CODEX_TG_CODEX_BINARY", "")
+	originalEnsure := ensureRuntime
+	t.Cleanup(func() { ensureRuntime = originalEnsure })
+	ensureRuntime = func(context.Context) (app.RuntimeInfo, error) {
+		return app.RuntimeInfo{}, errors.New("runtime unavailable")
+	}
 	var stdout, stderr bytes.Buffer
 	if code := run([]string{"open"}, &stdout, &stderr); code != exitError {
 		t.Fatalf("run() code = %d, want %d", code, exitError)
 	}
-	if !strings.Contains(stderr.String(), "usage: open [--new] <project_path>") &&
-		!strings.Contains(stderr.String(), "missing CODEX_TG_IPC_TOKEN") {
+	if strings.Contains(stderr.String(), "usage: open") {
 		t.Fatalf("stderr = %q", stderr.String())
 	}
 }
@@ -45,6 +78,9 @@ func TestLoadOpenRuntimeFallsBackToRuntimeFile(t *testing.T) {
 	if err := app.SaveRuntime(app.RuntimePath(), want); err != nil {
 		t.Fatal(err)
 	}
+	originalEnsure := ensureRuntime
+	t.Cleanup(func() { ensureRuntime = originalEnsure })
+	ensureRuntime = func(context.Context) (app.RuntimeInfo, error) { return app.LoadRuntime(app.RuntimePath()) }
 
 	got, err := loadOpenRuntime()
 	if err != nil {
