@@ -318,6 +318,27 @@ func TestActiveSession_PropagatesCanceledContext(t *testing.T) {
 	}
 }
 
+func TestRecentSessions_ReturnsNewestSessionsWithinLimit(t *testing.T) {
+	store := openTestStore(t)
+	if _, err := store.db.Exec(`
+		INSERT INTO projects (path, name, enabled) VALUES ('/project/demo', 'demo', 1);
+		INSERT INTO sessions (thread_id, project_path, active, updated_at) VALUES
+			('thr-old', '/project/demo', 0, 10),
+			('thr-middle', '/project/demo', 0, 20),
+			('thr-new', '/project/demo', 1, 30);
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := store.RecentSessions(context.Background(), "/project/demo", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].ThreadID != "thr-new" || got[1].ThreadID != "thr-middle" {
+		t.Fatalf("RecentSessions() = %+v", got)
+	}
+}
+
 func TestQueue_DequeueReturnsMessagesInFIFOOrder(t *testing.T) {
 	store := openTestStore(t)
 	prepareQueueSession(t, store, "thread-queue")
@@ -344,6 +365,27 @@ func TestQueue_DequeueReturnsMessagesInFIFOOrder(t *testing.T) {
 	assertQueuedMessage(t, second, messages[1])
 	if first.ID >= second.ID {
 		t.Fatalf("queue IDs = %d, %d; want increasing", first.ID, second.ID)
+	}
+}
+
+func TestQueuedMessages_ReturnsFIFOWithoutConsuming(t *testing.T) {
+	store := openTestStore(t)
+	prepareQueueSession(t, store, "thread-list")
+	for _, text := range []string{"first", "second"} {
+		if err := store.Enqueue(context.Background(), models.QueuedMessage{ThreadID: "thread-list", ChatID: 10, Text: text}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := store.QueuedMessages(context.Background(), "thread-list")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Text != "first" || got[1].Text != "second" {
+		t.Fatalf("QueuedMessages() = %+v", got)
+	}
+	if _, err := store.Dequeue(context.Background(), "thread-list"); err != nil {
+		t.Fatalf("queue was consumed while listing: %v", err)
 	}
 }
 

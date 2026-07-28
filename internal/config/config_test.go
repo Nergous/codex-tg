@@ -181,6 +181,19 @@ func TestLoad(t *testing.T) {
 		}
 	})
 
+	t.Run("trailing JSON", func(t *testing.T) {
+		cfg := validConfig(t)
+		data, err := json.Marshal(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := writeConfigFile(t, append(data, []byte(` {}`)...))
+
+		if _, err := Load(path); err == nil {
+			t.Fatal("Load() error = nil, want trailing data error")
+		}
+	})
+
 	t.Run("invalid config", func(t *testing.T) {
 		cfg := validConfig(t)
 		cfg.Telegram.AllowedChatID = 0

@@ -30,6 +30,7 @@ type fakeCoordinator struct {
 	cancelCalls      []string
 	execResponses    map[string]func(string) (string, error)
 	recentSessionErr error
+	queuedMessages   []models.QueuedMessage
 }
 
 type execCall struct {
@@ -238,6 +239,12 @@ func (f *fakeCoordinator) RecentSessions(_ context.Context, projectPath string, 
 	return sessions, nil
 }
 
+func (f *fakeCoordinator) QueuedMessages(context.Context, string) ([]models.QueuedMessage, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]models.QueuedMessage(nil), f.queuedMessages...), nil
+}
+
 func (f *fakeCoordinator) Exec(_ context.Context, threadID, command string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -262,6 +269,19 @@ func (f *fakeCoordinator) reset() {
 	f.cancelCalls = nil
 	f.recentCalls = nil
 	f.execCalls = nil
+}
+
+func TestQueueCommandListsQueuedPrompts(t *testing.T) {
+	handler, coordinator, messenger, _ := newFixture(t, 100, 200)
+	coordinator.queuedMessages = []models.QueuedMessage{{Text: "first prompt"}, {Text: "second prompt"}}
+
+	if err := handler.Handle(context.Background(), messageUpdate(100, 200, "private", "/queue")); err != nil {
+		t.Fatal(err)
+	}
+	got := messenger.lastSendText()
+	if !strings.Contains(got, "1. first prompt") || !strings.Contains(got, "2. second prompt") {
+		t.Fatalf("queue response = %q", got)
+	}
 }
 
 type fakeMessenger struct {

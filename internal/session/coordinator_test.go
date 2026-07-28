@@ -208,6 +208,35 @@ func TestResumeThreadStartsPersistedQueueInFIFOOrderAfterRecovery(t *testing.T) 
 	}
 }
 
+func TestCoordinatorExposesRecentSessionsAndQueue(t *testing.T) {
+	ctx := context.Background()
+	db, err := state.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	project := models.Project{Name: "demo", Path: t.TempDir()}
+	if err := db.PutProject(ctx, &project); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetActiveSession(ctx, &models.Session{ProjectPath: project.Path, ThreadID: "thr-1", Active: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Enqueue(ctx, models.QueuedMessage{ThreadID: "thr-1", ChatID: 200, Text: "queued"}); err != nil {
+		t.Fatal(err)
+	}
+
+	coordinator := New(&fakeCodex{}, db, []models.Project{project})
+	sessions, err := coordinator.RecentSessions(ctx, project.Path, 10)
+	if err != nil || len(sessions) != 1 || sessions[0].ThreadID != "thr-1" {
+		t.Fatalf("RecentSessions() = %+v, %v", sessions, err)
+	}
+	queue, err := coordinator.QueuedMessages(ctx, "thr-1")
+	if err != nil || len(queue) != 1 || queue[0].Text != "queued" {
+		t.Fatalf("QueuedMessages() = %+v, %v", queue, err)
+	}
+}
+
 func sameStrings(got, want []string) bool {
 	if len(got) != len(want) {
 		return false

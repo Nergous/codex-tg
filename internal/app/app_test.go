@@ -41,7 +41,9 @@ func TestPumpCodexEventsRendersAndCompletesTerminalTurn(t *testing.T) {
 	}
 }
 
-type fakeSupervisor struct{ starts, stops int }
+type fakeSupervisor struct {
+	starts, stops int
+}
 
 func (f *fakeSupervisor) Start(context.Context) (codex.AppServerEndpoint, error) {
 	f.starts++
@@ -68,7 +70,10 @@ func (f *blockingUpdates) GetUpdates(ctx context.Context, _ int64) ([]telegram.U
 	return nil, ctx.Err()
 }
 
-func (f *blockingUpdates) UpdateOffset(context.Context) (int64, error) { return 0, nil }
+func (f *blockingUpdates) UpdateOffset(context.Context) (int64, error) {
+	return 0, nil
+}
+
 func (f *blockingUpdates) SaveUpdateOffset(_ context.Context, offset int64) error {
 	f.saved = offset
 	close(f.savedCh)
@@ -107,8 +112,16 @@ func TestRunBridgeConsumesTelegramAndCodexEvents(t *testing.T) {
 func (f *fakeUpdates) GetUpdates(context.Context, int64) ([]telegram.Update, error) {
 	return []telegram.Update{{UpdateID: 42}}, nil
 }
-func (f *fakeUpdates) UpdateOffset(context.Context) (int64, error)       { return f.offset, nil }
-func (f *fakeUpdates) SaveUpdateOffset(_ context.Context, v int64) error { f.saved = v; return nil }
+
+func (f *fakeUpdates) UpdateOffset(context.Context) (int64, error) {
+	return f.offset, nil
+}
+
+func (f *fakeUpdates) SaveUpdateOffset(_ context.Context, v int64) error {
+	f.saved = v
+	return nil
+}
+
 func TestPollOncePersistsOffsetAfterHandler(t *testing.T) {
 	f := &fakeUpdates{}
 	s := New(&fakeSupervisor{})
@@ -138,7 +151,11 @@ func TestServiceStartsIPC(t *testing.T) {
 		t.Fatal(err)
 	}
 }
-func (f *fakeSupervisor) Stop() error { f.stops++; return nil }
+
+func (f *fakeSupervisor) Stop() error {
+	f.stops++
+	return nil
+}
 
 func TestServiceStartAndStop(t *testing.T) {
 	fake := &fakeSupervisor{}
@@ -182,5 +199,25 @@ func TestServiceOpenReturnsRuntimeEndpoint(t *testing.T) {
 	}
 	if got.ThreadID != "thr-1" || got.Endpoint != "ws://127.0.0.1:4500" || got.Token != "runtime" {
 		t.Fatalf("open=%+v", got)
+	}
+}
+
+func TestServiceStatusReportsLastOpenedThread(t *testing.T) {
+	service := New(&fakeSupervisor{})
+	service.open = func(context.Context, string, bool) (string, error) { return "thr-1", nil }
+	if err := service.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	projectPath := t.TempDir()
+	if _, err := service.Open(context.Background(), ipc.OpenRequest{ProjectPath: projectPath}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := service.Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Running || got.ThreadID != "thr-1" || got.ProjectPath != projectPath {
+		t.Fatalf("Status() = %+v", got)
 	}
 }

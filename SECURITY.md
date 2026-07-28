@@ -2,10 +2,9 @@
 
 ## Supported versions
 
-`codex-tg` has no production-ready release yet. Security fixes currently
-target the default branch on a best-effort basis. After versioned releases
-begin, only the latest release line will receive security updates unless a
-release announcement states otherwise.
+`codex-tg` is currently in the `0.1.x` beta release line. Security fixes target
+the latest published release and the default branch. Older release lines are
+not supported unless a release announcement states otherwise.
 
 ## Reporting a vulnerability
 

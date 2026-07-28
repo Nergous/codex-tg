@@ -143,15 +143,14 @@ func (c *Coordinator) Status(_ context.Context, threadID string) (string, error)
 	}
 	return "idle", nil
 }
-func (c *Coordinator) RecentSessions(ctx context.Context, projectPath string, _ int) ([]models.Session, error) {
-	s, err := c.state.ActiveSession(ctx, projectPath)
-	if errors.Is(err, state.ErrNotFound) {
-		return nil, nil
-	}
-	if err != nil {
+func (c *Coordinator) RecentSessions(ctx context.Context, projectPath string, limit int) ([]models.Session, error) {
+	return c.state.RecentSessions(ctx, projectPath, limit)
+}
+func (c *Coordinator) QueuedMessages(ctx context.Context, threadID string) ([]models.QueuedMessage, error) {
+	if _, err := c.findSession(ctx, threadID); err != nil {
 		return nil, err
 	}
-	return []models.Session{s}, nil
+	return c.state.QueuedMessages(ctx, threadID)
 }
 func (c *Coordinator) Exec(ctx context.Context, threadID, command string) (string, error) {
 	executor, ok := c.codex.(commandExecutor)

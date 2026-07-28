@@ -16,6 +16,7 @@ type Supervisor interface {
 	Start(context.Context) (codex.AppServerEndpoint, error)
 	Stop() error
 }
+
 type Updates interface {
 	GetUpdates(context.Context, int64) ([]telegram.Update, error)
 	UpdateOffset(context.Context) (int64, error)
@@ -23,14 +24,16 @@ type Updates interface {
 }
 
 type Service struct {
-	supervisor Supervisor
-	mu         sync.Mutex
-	endpoint   codex.AppServerEndpoint
-	started    bool
-	open       func(context.Context, string, bool) (string, error)
-	recover    func(context.Context) error
-	afterStart func(context.Context, codex.AppServerEndpoint) error
-	ipc        *ipc.Server
+	supervisor  Supervisor
+	mu          sync.Mutex
+	endpoint    codex.AppServerEndpoint
+	started     bool
+	open        func(context.Context, string, bool) (string, error)
+	recover     func(context.Context) error
+	afterStart  func(context.Context, codex.AppServerEndpoint) error
+	ipc         *ipc.Server
+	threadID    string
+	projectPath string
 }
 
 type CodexEventHandler func(context.Context, codex.Event) error
@@ -80,7 +83,10 @@ func (s *Service) RunBridge(
 	return err
 }
 
-func New(supervisor Supervisor) *Service { return &Service{supervisor: supervisor} }
+func New(supervisor Supervisor) *Service {
+	return &Service{supervisor: supervisor}
+}
+
 func (s *Service) Start(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -115,6 +121,7 @@ func (s *Service) Configure(open func(context.Context, string, bool) (string, er
 	s.recover = recover
 	s.afterStart = afterStart
 }
+
 func (s *Service) Stop(context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -128,8 +135,11 @@ func (s *Service) Stop(context.Context) error {
 	err := s.supervisor.Stop()
 	s.started = false
 	s.endpoint = codex.AppServerEndpoint{}
+	s.threadID = ""
+	s.projectPath = ""
 	return err
 }
+
 func (s *Service) StartIPC(ctx context.Context, token string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -147,6 +157,7 @@ func (s *Service) StartIPC(ctx context.Context, token string) (string, error) {
 	s.ipc = server
 	return address, nil
 }
+
 func (s *Service) Endpoint() (codex.AppServerEndpoint, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -155,6 +166,7 @@ func (s *Service) Endpoint() (codex.AppServerEndpoint, error) {
 	}
 	return s.endpoint, nil
 }
+
 func (s *Service) Open(ctx context.Context, req ipc.OpenRequest) (ipc.OpenResponse, error) {
 	endpoint, err := s.Endpoint()
 	if err != nil {
@@ -167,15 +179,22 @@ func (s *Service) Open(ctx context.Context, req ipc.OpenRequest) (ipc.OpenRespon
 	if err != nil {
 		return ipc.OpenResponse{}, err
 	}
+	s.mu.Lock()
+	s.threadID = thread
+	s.projectPath = req.ProjectPath
+	s.mu.Unlock()
 	return ipc.OpenResponse{ThreadID: thread, Endpoint: endpoint.URL, Token: endpoint.Token}, nil
 }
+
 func (s *Service) Status(context.Context) (ipc.StatusResponse, error) {
-	endpoint, err := s.Endpoint()
-	if err != nil {
-		return ipc.StatusResponse{}, err
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.started {
+		return ipc.StatusResponse{}, ErrNotStarted
 	}
-	return ipc.StatusResponse{Running: endpoint.URL != ""}, nil
+	return ipc.StatusResponse{Running: s.endpoint.URL != "", ThreadID: s.threadID, ProjectPath: s.projectPath}, nil
 }
+
 func (s *Service) PollOnce(ctx context.Context, updates Updates, handle func(context.Context, telegram.Update) error) error {
 	offset, err := updates.UpdateOffset(ctx)
 	if err != nil {

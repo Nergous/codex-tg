@@ -2,6 +2,8 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -54,6 +56,9 @@ func load(path string, openFile func(string) (*os.File, error)) (*Config, error)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&cfg); err != nil {
 		return nil, err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return nil, ErrInvalidConfigFile
 	}
 
 	if err := cfg.Validate(); err != nil {

@@ -34,8 +34,6 @@ const (
 	exitUsage
 )
 
-var errCommandNotWired = errors.New("command not wired")
-
 type commandHandler func(args []string) error
 
 var commands = map[string]commandHandler{
@@ -182,7 +180,7 @@ func (p pollingStore) SaveUpdateOffset(ctx context.Context, offset int64) error 
 }
 
 func runServe([]string) error {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := signal.NotifyContext(context.Background(), shutdownSignals()...)
 	defer stop()
 	cfg, err := config.Load(app.ConfigPath())
 	if err != nil {
@@ -283,10 +281,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exitError
 	}
 	return exitOK
-}
-
-func notWired([]string) error {
-	return errCommandNotWired
 }
 
 func runOpen(args []string) error {

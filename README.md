@@ -5,31 +5,37 @@ an authorized Telegram private chat. Its goal is to let one operator continue
 the same Codex thread from either interface without exposing Codex App Server
 to the network.
 
+Version `v0.1.1` provides the complete single-operator bridge lifecycle:
+setup, supervised App Server startup, Telegram polling, shared threads, queued
+prompts, approvals, recovery, local TUI attachment, and per-user autostart. It
+is considered beta while the upstream Codex App Server protocol remains
+experimental.
+
 > [!WARNING]
 > This project uses experimental Codex App Server protocol. Use it only with
 > an allow-listed disposable or trusted local workspace.
 
-## Intended architecture
+## Architecture
 
-One `codex-tg serve` process will:
+One `codex-tg serve` process:
 
 1. Start `codex app-server` on an authenticated loopback WebSocket.
 2. Poll Telegram for messages from one configured user and private chat.
 3. Coordinate projects, Codex threads, turns, and approvals.
 4. Persist non-secret state in SQLite.
 
-`codex-tg open <path>` will ask the service to start or resume a thread and
+`codex-tg open <path>` asks the service to start or resume a thread and
 then launch the local Codex TUI on that exact thread.
 
 ## Security model
 
-The planned implementation follows these constraints:
+The implementation enforces these constraints:
 
 - App Server and local control endpoints bind only to `127.0.0.1`.
 - Telegram updates must match both the configured user ID and private chat ID.
 - The Telegram bot token is stored in Windows Credential Manager or the Linux
-  Secret Service, never in the
-  repository, configuration file, database, logs, or process arguments.
+  Secret Service, never in the repository, configuration file, database, logs,
+  or process arguments.
 - Codex may operate only inside explicitly allow-listed canonical project
   paths.
 - Threads use the `workspace-write` sandbox and `on-request` approvals.
@@ -70,7 +76,7 @@ installs a root service.
 
 ## Configuration
 
-Non-secret configuration will use JSON similar to:
+Non-secret configuration uses JSON similar to:
 
 ```json
 {
@@ -118,6 +124,8 @@ systemd user service.
 
 Telegram commands: `/status`, `/projects`, `/project`, `/new`, `/resume`,
 `/sessions`, `/diff`, `/cancel`, `/queue`, `/lock`, and `/unlock`.
+`/sessions` lists recent persisted threads for the selected project. `/queue`
+lists prompts waiting behind the active turn without consuming them.
 
 To uninstall, run `codex-tg autostart remove`, stop the service, then remove
 the platform config directory and the `codex-tg/telegram-bot-token` credential.
@@ -174,8 +182,8 @@ Release flow:
 4. Create and push an annotated version tag.
 5. Let the release workflow build and publish artifacts.
 
-Until a release tag exists, builds are development snapshots identified by
-their commit hash.
+Builds made between release tags are development snapshots identified by their
+commit hash.
 
 ## License
 

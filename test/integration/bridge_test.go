@@ -55,6 +55,9 @@ func (c *coordinator) Cancel(context.Context, string) error           { return n
 func (c *coordinator) RecentSessions(context.Context, string, int) ([]models.Session, error) {
 	return nil, nil
 }
+func (c *coordinator) QueuedMessages(context.Context, string) ([]models.QueuedMessage, error) {
+	return nil, nil
+}
 func (c *coordinator) Exec(context.Context, string, string) (string, error) { return "", nil }
 
 type messenger struct{}

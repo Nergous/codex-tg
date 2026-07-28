@@ -63,6 +63,7 @@ type Coordinator interface {
 	Status(ctx context.Context, threadID string) (string, error)
 	Cancel(ctx context.Context, threadID string) error
 	RecentSessions(ctx context.Context, projectPath string, limit int) ([]models.Session, error)
+	QueuedMessages(ctx context.Context, threadID string) ([]models.QueuedMessage, error)
 	Exec(ctx context.Context, threadID, command string) (string, error)
 }
 
@@ -248,7 +249,7 @@ func (h *Handler) processCommand(ctx context.Context, chatID int64, command stri
 		}
 		return h.notify(ctx, chatID, "turn canceled")
 	case "queue":
-		return h.notify(ctx, chatID, "queue is empty")
+		return h.queue(ctx, chatID)
 	case "lock":
 		return h.lock(ctx, chatID)
 	case "unlock":
@@ -261,6 +262,35 @@ func (h *Handler) processCommand(ctx context.Context, chatID int64, command stri
 	default:
 		return h.notify(ctx, chatID, commandHelpText)
 	}
+}
+
+func (h *Handler) queue(ctx context.Context, chatID int64) error {
+	threadID, err := h.ensureThread(ctx, chatID)
+	if err != nil {
+		return h.notify(ctx, chatID, "no active thread")
+	}
+	messages, err := h.coordinator.QueuedMessages(ctx, threadID)
+	if err != nil {
+		return h.notify(ctx, chatID, "queue unavailable")
+	}
+	if len(messages) == 0 {
+		return h.notify(ctx, chatID, "queue is empty")
+	}
+	lines := make([]string, 0, len(messages)+1)
+	lines = append(lines, "queued prompts:")
+	for i, message := range messages {
+		text := strings.TrimSpace(message.Text)
+		if text == "" {
+			text = "(empty)"
+		}
+		lines = append(lines, fmt.Sprintf("%d. %s", i+1, text))
+	}
+	for _, chunk := range splitUTF8(strings.Join(lines, "\n"), defaultFinalChunkBytes) {
+		if _, err := h.messenger.Send(ctx, chatID, chunk, nil, MessageOptions{}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (h *Handler) handleCallback(ctx context.Context, chatID int64, callback *CallbackQuery) error {

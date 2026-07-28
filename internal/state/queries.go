@@ -48,7 +48,14 @@ const (
 			active = 1,
 			updated_at = excluded.updated_at
 	`
-	selectActiveSessionQuery = `SELECT project_path, thread_id, active FROM sessions WHERE project_path = ? AND active = 1`
+	selectActiveSessionQuery  = `SELECT project_path, thread_id, active FROM sessions WHERE project_path = ? AND active = 1`
+	selectRecentSessionsQuery = `
+		SELECT project_path, thread_id, active
+		FROM sessions
+		WHERE project_path = ?
+		ORDER BY updated_at DESC, thread_id ASC
+		LIMIT ?
+	`
 
 	enqueueMessageQuery = `
 		INSERT INTO queued_messages (thread_id, chat_id, text, created_at)
@@ -61,7 +68,13 @@ const (
 		ORDER BY id ASC
 		LIMIT 1
 	`
-	deleteQueuedMessageQuery = `DELETE FROM queued_messages WHERE id = ?`
+	deleteQueuedMessageQuery  = `DELETE FROM queued_messages WHERE id = ?`
+	selectQueuedMessagesQuery = `
+		SELECT id, thread_id, chat_id, text, created_at
+		FROM queued_messages
+		WHERE thread_id = ?
+		ORDER BY id ASC
+	`
 
 	saveUpdateOffsetQuery = `
 		INSERT INTO bot_state (key, value) VALUES (?, ?)
@@ -202,6 +215,30 @@ func (s *Store) ActiveSession(ctx context.Context, projectPath string) (models.S
 	return session, nil
 }
 
+func (s *Store) RecentSessions(ctx context.Context, projectPath string, limit int) ([]models.Session, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx, selectRecentSessionsQuery, projectPath, limit)
+	if err != nil {
+		return nil, fmt.Errorf("recent sessions: query: %w", err)
+	}
+	defer rows.Close()
+
+	var sessions []models.Session
+	for rows.Next() {
+		var session models.Session
+		if err := rows.Scan(&session.ProjectPath, &session.ThreadID, &session.Active); err != nil {
+			return nil, fmt.Errorf("recent sessions: scan: %w", err)
+		}
+		sessions = append(sessions, session)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("recent sessions: iterate: %w", err)
+	}
+	return sessions, nil
+}
+
 func (s *Store) Enqueue(ctx context.Context, message models.QueuedMessage) error {
 	res, err := s.db.ExecContext(
 		ctx,
@@ -222,6 +259,27 @@ func (s *Store) Enqueue(ctx context.Context, message models.QueuedMessage) error
 		return fmt.Errorf("enqueue message: no rows affected")
 	}
 	return nil
+}
+
+func (s *Store) QueuedMessages(ctx context.Context, threadID string) ([]models.QueuedMessage, error) {
+	rows, err := s.db.QueryContext(ctx, selectQueuedMessagesQuery, threadID)
+	if err != nil {
+		return nil, fmt.Errorf("queued messages: query: %w", err)
+	}
+	defer rows.Close()
+
+	var messages []models.QueuedMessage
+	for rows.Next() {
+		var message models.QueuedMessage
+		if err := rows.Scan(&message.ID, &message.ThreadID, &message.ChatID, &message.Text, &message.CreatedAt); err != nil {
+			return nil, fmt.Errorf("queued messages: scan: %w", err)
+		}
+		messages = append(messages, message)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("queued messages: iterate: %w", err)
+	}
+	return messages, nil
 }
 
 func (s *Store) Dequeue(ctx context.Context, threadID string) (_ models.QueuedMessage, err error) {
