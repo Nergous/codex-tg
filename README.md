@@ -6,8 +6,8 @@ the same Codex thread from either interface without exposing Codex App Server
 to the network.
 
 > [!WARNING]
-> This project is in early development. It is not ready for production use,
-> and the current bootstrap may not build while core packages are being added.
+> This project uses experimental Codex App Server protocol. Use it only with
+> an allow-listed disposable or trusted local workspace.
 
 ## Intended architecture
 
@@ -55,7 +55,7 @@ go install github.com/go-task/task/v3/cmd/task@latest
 go install golang.org/x/vuln/cmd/govulncheck@latest
 ```
 
-## Planned configuration
+## Configuration
 
 Non-secret configuration will use JSON similar to:
 
@@ -80,7 +80,7 @@ Non-secret configuration will use JSON similar to:
 
 The Telegram bot token must not be placed in this file.
 
-## Planned CLI
+## CLI
 
 ```text
 codex-tg setup
@@ -91,8 +91,20 @@ codex-tg status
 codex-tg autostart install|remove|status
 ```
 
-These commands document the intended interface; they are not all implemented
-yet.
+Run `codex-tg setup` locally first. It validates the Telegram bot, stores its
+token in Windows Credential Manager, and writes non-secret config under
+`%LOCALAPPDATA%\codex-tg\config.json`.
+
+Start the bridge with `codex-tg serve`, then use `codex-tg open [--new] <path>`
+to attach the TUI to the exact service-owned thread. Use `project list`,
+`project add <name> <path>`, and `project remove <name>` to maintain the
+allow-list. `autostart install` creates a per-user Windows logon task.
+
+Telegram commands: `/status`, `/projects`, `/project`, `/new`, `/resume`,
+`/sessions`, `/diff`, `/cancel`, `/queue`, `/lock`, and `/unlock`.
+
+To uninstall, run `codex-tg autostart remove`, stop the service, then remove
+`%LOCALAPPDATA%\codex-tg` and the `codex-tg/telegram-bot-token` credential.
 
 ## Development
 

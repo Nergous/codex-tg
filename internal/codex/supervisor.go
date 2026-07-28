@@ -319,6 +319,7 @@ func (s *Supervisor) waitForReadiness(ctx context.Context, wsURL string) error {
 				_, _ = io.Copy(io.Discard, resp.Body)
 				resp.Body.Close()
 				if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+					cancel()
 					return nil
 				}
 				lastErr = fmt.Errorf("readyz status %s", resp.Status)

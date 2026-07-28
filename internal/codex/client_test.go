@@ -313,8 +313,22 @@ func TestClientConcurrentRequestsReceiveResponsesOutOfOrder(t *testing.T) {
 	}()
 
 	out := make(chan string, 2)
-	go func() { id, err := client.StartThread(context.Background(), "thread-one"); if err != nil { out <- "ERR:" + err.Error(); return }; out <- id }()
-	go func() { id, err := client.StartThread(context.Background(), "thread-two"); if err != nil { out <- "ERR:" + err.Error(); return }; out <- id }()
+	go func() {
+		id, err := client.StartThread(context.Background(), "thread-one")
+		if err != nil {
+			out <- "ERR:" + err.Error()
+			return
+		}
+		out <- id
+	}()
+	go func() {
+		id, err := client.StartThread(context.Background(), "thread-two")
+		if err != nil {
+			out <- "ERR:" + err.Error()
+			return
+		}
+		out <- id
+	}()
 
 	got := map[string]struct{}{}
 	for range 2 {

@@ -15,3 +15,5 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Telegram bot token storage through Windows Credential Manager.
 - Development and release automation with Task and GoReleaser.
 - Security policy, implementation plan, and project documentation.
+- Service lifecycle, local setup, recovery state, and Windows autostart.
+- Operator configuration runbook and fake bridge integration coverage.
