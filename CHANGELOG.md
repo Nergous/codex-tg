@@ -7,6 +7,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-07-28
+
+### Changed
+
+- Publish platform executables directly instead of wrapping them with README,
+  LICENSE, and CHANGELOG in ZIP archives.
+
 ## [0.1.1] - 2026-07-28
 
 ### Changed
