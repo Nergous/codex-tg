@@ -7,11 +7,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-07-28
+
 ### Added
 
 - Add resumable first-run pairing, per-user command installation, autostart,
   confirmed current-project registration, safe service startup, and
   no-argument current-directory opening.
+
+### Fixed
+
+- Use the installed per-user executable for autostart instead of retaining a
+  temporary download path.
+- Bound service readiness probes and recover stale startup locks after an
+  interrupted launch.
+- Retry interactive thread subscription while its newly created rollout file
+  is still empty instead of stopping the bridge.
 
 ## [0.1.4] - 2026-07-28
 
