@@ -15,9 +15,9 @@ import (
 type approvals struct{ resolved int }
 
 func (a *approvals) Request(context.Context, approval.Request) (string, error) { return "nonce", nil }
-func (a *approvals) Resolve(context.Context, int64, string, approval.Decision) error {
+func (a *approvals) ResolveWith(_ context.Context, _ int64, _ string, _ approval.Decision, respond func() error) error {
 	a.resolved++
-	return nil
+	return respond()
 }
 
 type responder struct{ calls int }

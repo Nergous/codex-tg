@@ -13,6 +13,7 @@ import (
 	"github.com/Nergous/codex-tg/internal/approval"
 	"github.com/Nergous/codex-tg/internal/codex"
 	"github.com/Nergous/codex-tg/internal/models"
+	"github.com/Nergous/codex-tg/internal/state"
 )
 
 type fakeCoordinator struct {
@@ -118,15 +119,19 @@ func (f *fakeApprovalService) lastResolve() fakeApprovalResolve {
 	return f.resolves[len(f.resolves)-1]
 }
 
-func (f *fakeApprovalService) Resolve(_ context.Context, chatID int64, nonce string, decision approval.Decision) error {
+func (f *fakeApprovalService) ResolveWith(_ context.Context, chatID int64, nonce string, decision approval.Decision, respond func() error) error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.resolves = append(f.resolves, fakeApprovalResolve{
 		chatID:   chatID,
 		nonce:    nonce,
 		decision: decision,
 	})
-	return f.resolveErr
+	err := f.resolveErr
+	f.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	return respond()
 }
 
 type fakeApprovalResponder struct {
@@ -857,6 +862,13 @@ func TestOnEventRejectsUnsupportedApprovalKind(t *testing.T) {
 	if got := service.requestCount(); got != 0 {
 		t.Fatalf("approval service requests = %d, want 0", got)
 	}
+	if responder.callCount() != 1 {
+		t.Fatalf("responder calls = %d, want 1", responder.callCount())
+	}
+	response, ok := responder.lastCall().result.(map[string]any)
+	if !ok || response["decision"] != "decline" {
+		t.Fatalf("response=%#v want decline", responder.lastCall().result)
+	}
 
 	send := messenger.lastSend()
 	if send.text == "" || !strings.Contains(send.text, "unsupported approval request") {
@@ -934,5 +946,53 @@ func TestCallbackRejectedWhenTokenBoundToDifferentChat(t *testing.T) {
 	defer coord.mu.Unlock()
 	if len(coord.openCalls) != 0 || len(coord.submitCalls) != 0 {
 		t.Fatalf("unexpected coordinator calls for mismatched callback: open=%d submit=%d", len(coord.openCalls), len(coord.submitCalls))
+	}
+}
+
+func TestLockPersistsAcrossHandlerRestart(t *testing.T) {
+	ctx := context.Background()
+	store, err := state.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	coord := &fakeCoordinator{projects: []models.Project{{Name: "demo", Path: `C:\repo`}}}
+	messenger := &fakeMessenger{}
+	first := NewHandler(HandlerOptions{
+		Coordinator:   coord,
+		Messenger:     messenger,
+		AllowedUserID: 100,
+		AllowedChatID: 200,
+		LockStore:     store,
+	})
+	if err := first.Handle(ctx, messageUpdate(100, 200, "private", "/lock")); err != nil {
+		t.Fatal(err)
+	}
+	fields := strings.Fields(messenger.lastSend().text)
+	if len(fields) != 3 {
+		t.Fatalf("lock message=%q", messenger.lastSend().text)
+	}
+
+	second := NewHandler(HandlerOptions{
+		Coordinator:   coord,
+		Messenger:     messenger,
+		AllowedUserID: 100,
+		AllowedChatID: 200,
+		LockStore:     store,
+	})
+	if err := second.Handle(ctx, messageUpdate(100, 200, "private", "change files")); err != nil {
+		t.Fatal(err)
+	}
+	if len(coord.submitCalls) != 0 {
+		t.Fatalf("locked handler submitted prompt: %#v", coord.submitCalls)
+	}
+	if err := second.Handle(ctx, messageUpdate(100, 200, "private", "/unlock "+fields[2])); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.Handle(ctx, messageUpdate(100, 200, "private", "change files")); err != nil {
+		t.Fatal(err)
+	}
+	if len(coord.submitCalls) != 1 {
+		t.Fatalf("unlocked handler submit calls=%#v", coord.submitCalls)
 	}
 }

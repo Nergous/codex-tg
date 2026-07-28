@@ -14,3 +14,5 @@ func ConfigPath() string {
 }
 
 func DataPath() string { return filepath.Join(filepath.Dir(ConfigPath()), "state.db") }
+
+func RuntimePath() string { return filepath.Join(filepath.Dir(ConfigPath()), "runtime.json") }

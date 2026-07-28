@@ -42,11 +42,17 @@ type Messenger interface {
 
 type ApprovalService interface {
 	Request(ctx context.Context, req approval.Request) (string, error)
-	Resolve(ctx context.Context, chatID int64, nonce string, decision approval.Decision) error
+	ResolveWith(ctx context.Context, chatID int64, nonce string, decision approval.Decision, respond func() error) error
 }
 
 type ApprovalResponder interface {
 	Respond(ctx context.Context, requestID json.RawMessage, result any) error
+}
+
+type LockStore interface {
+	SetBotLock(ctx context.Context, chatID int64, nonce string, expiresAt int64) error
+	IsBotLocked(ctx context.Context, chatID int64) (bool, error)
+	UnlockBot(ctx context.Context, chatID int64, nonce string, now int64) error
 }
 
 type Coordinator interface {
@@ -72,6 +78,7 @@ type Handler struct {
 
 	approvalService   ApprovalService
 	approvalResponder ApprovalResponder
+	lockStore         LockStore
 
 	mu sync.Mutex
 
@@ -90,6 +97,7 @@ type HandlerOptions struct {
 	Now               func() time.Time
 	ApprovalService   ApprovalService
 	ApprovalResponder ApprovalResponder
+	LockStore         LockStore
 }
 
 type chatState struct {
@@ -128,6 +136,7 @@ func NewHandler(opts HandlerOptions) *Handler {
 		now:               now,
 		approvalService:   opts.ApprovalService,
 		approvalResponder: opts.ApprovalResponder,
+		lockStore:         opts.LockStore,
 		renderer: NewRenderer(RendererOptions{
 			Messenger: opts.Messenger,
 			Now:       now,
@@ -152,7 +161,11 @@ func (h *Handler) Handle(ctx context.Context, update Update) error {
 		return h.handleMessage(ctx, chatID, update.Message)
 	}
 	if update.CallbackQuery != nil {
-		if state := h.state(chatID); state.locked && !h.isCallbackAllowed(update.CallbackQuery) {
+		locked, err := h.isLocked(ctx, chatID)
+		if err != nil {
+			return h.notify(ctx, chatID, "lock state unavailable")
+		}
+		if locked && !h.isCallbackAllowed(update.CallbackQuery) {
 			return h.replyLocked(ctx, chatID)
 		}
 		return h.handleCallback(ctx, chatID, update.CallbackQuery)
@@ -166,8 +179,11 @@ func (h *Handler) handleMessage(ctx context.Context, chatID int64, message *Mess
 		return nil
 	}
 
-	state := h.state(chatID)
-	if state.locked {
+	locked, err := h.isLocked(ctx, chatID)
+	if err != nil {
+		return h.notify(ctx, chatID, "lock state unavailable")
+	}
+	if locked {
 		command, _, isCommand, forMe := parseCommand(text, h.botName)
 		if isCommand {
 			if forMe && (command == "status" || command == "unlock") {
@@ -505,17 +521,26 @@ func (h *Handler) lock(ctx context.Context, chatID int64) error {
 	if err != nil {
 		return h.notify(ctx, chatID, "cannot lock")
 	}
-	h.withState(chatID, func(state *chatState) {
-		state.locked = true
-	})
-	h.withUnlock(chatID, token, unlockState{
-		expires: h.now().Add(defaultLockTTL),
-		used:    false,
-	})
+	expires := h.now().Add(defaultLockTTL)
+	if h.lockStore != nil {
+		if err := h.lockStore.SetBotLock(ctx, chatID, token, expires.Unix()); err != nil {
+			return h.notify(ctx, chatID, "cannot lock")
+		}
+	} else {
+		h.withUnlock(chatID, token, unlockState{expires: expires, used: false})
+	}
+	h.withState(chatID, func(state *chatState) { state.locked = true })
 	return h.notify(ctx, chatID, fmt.Sprintf("locked. /unlock %s", token))
 }
 
 func (h *Handler) unlock(ctx context.Context, chatID int64, token string) error {
+	if h.lockStore != nil {
+		if err := h.lockStore.UnlockBot(ctx, chatID, token, h.now().Unix()); err != nil {
+			return h.notify(ctx, chatID, "invalid or expired token")
+		}
+		h.withState(chatID, func(state *chatState) { state.locked = false })
+		return h.notify(ctx, chatID, "unlocked")
+	}
 	nonce, err := h.unlockState(token)
 	if err != nil {
 		return h.notify(ctx, chatID, "invalid or expired token")
@@ -532,6 +557,13 @@ func (h *Handler) unlock(ctx context.Context, chatID int64, token string) error 
 	})
 	h.markUnlockUsed(token)
 	return h.notify(ctx, chatID, "unlocked")
+}
+
+func (h *Handler) isLocked(ctx context.Context, chatID int64) (bool, error) {
+	if h.lockStore != nil {
+		return h.lockStore.IsBotLocked(ctx, chatID)
+	}
+	return h.state(chatID).locked, nil
 }
 
 func (h *Handler) openDefaultProject(ctx context.Context, chatID int64) error {
@@ -608,6 +640,9 @@ func (h *Handler) handleApprovalEvent(ctx context.Context, event codex.Event) er
 	kind := firstNonEmpty(payload.Kind, strings.TrimPrefix(event.Method, "item/"), "approval")
 	normalizedKind := normalizeApprovalKind(kind)
 	if !isSupportedApprovalKind(normalizedKind) {
+		if err := h.approvalResponder.Respond(ctx, event.RequestID, map[string]any{"decision": "decline"}); err != nil {
+			return h.notify(ctx, chatID, "unsupported approval request; automatic denial failed")
+		}
 		return h.notify(ctx, chatID, "unsupported approval request")
 	}
 	reqID := append(json.RawMessage(nil), event.RequestID...)
@@ -681,7 +716,12 @@ func (h *Handler) handleApprovalCallback(ctx context.Context, payload callbackPa
 	if h.approvalService == nil || h.approvalResponder == nil {
 		return h.notify(ctx, payload.chatID, "approval unavailable")
 	}
-	if err := h.approvalService.Resolve(ctx, payload.chatID, payload.approvalNonce, decision); err != nil {
+	result := map[string]any{
+		"decision": approvalDecisionForResponse(decision),
+	}
+	if err := h.approvalService.ResolveWith(ctx, payload.chatID, payload.approvalNonce, decision, func() error {
+		return h.approvalResponder.Respond(ctx, payload.approvalRequestID, result)
+	}); err != nil {
 		switch {
 		case errors.Is(err, state.ErrAlreadyResolved):
 			return h.notify(ctx, payload.chatID, "approval already handled")
@@ -692,13 +732,6 @@ func (h *Handler) handleApprovalCallback(ctx context.Context, payload callbackPa
 		default:
 			return h.notify(ctx, payload.chatID, "cannot resolve approval")
 		}
-	}
-
-	result := map[string]any{
-		"decision": approvalDecisionForResponse(decision),
-	}
-	if err := h.approvalResponder.Respond(ctx, payload.approvalRequestID, result); err != nil {
-		return h.notify(ctx, payload.chatID, "cannot send approval response")
 	}
 	return h.notify(ctx, payload.chatID, "approval responded")
 }

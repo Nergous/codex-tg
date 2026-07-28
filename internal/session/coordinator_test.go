@@ -70,3 +70,38 @@ func TestSubmitQueuesUntilTurnCompleted(t *testing.T) {
 		t.Fatalf("turns=%v", fake.turns)
 	}
 }
+
+func TestCompleteIgnoresStaleTurn(t *testing.T) {
+	ctx := context.Background()
+	db, err := state.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	project := models.Project{Name: "demo", Path: t.TempDir()}
+	if err := db.PutProject(ctx, &project); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetActiveSession(ctx, &models.Session{ProjectPath: project.Path, ThreadID: "thr-1", Active: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	fake := &fakeCodex{}
+	c := New(fake, db, []models.Project{project})
+	if err := c.Submit(ctx, "thr-1", "one"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Submit(ctx, "thr-1", "two"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := c.Complete(ctx, "thr-1", "turn-stale"); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.turns) != 1 {
+		t.Fatalf("stale completion started queued turn: %v", fake.turns)
+	}
+	if got, err := c.Status(ctx, "thr-1"); err != nil || got != "running: turn-one" {
+		t.Fatalf("status=%q error=%v", got, err)
+	}
+}

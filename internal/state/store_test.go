@@ -21,8 +21,8 @@ func TestOpen_FreshDatabaseAppliesMigrations(t *testing.T) {
 	if err := db.QueryRow(`SELECT version FROM schema_version`).Scan(&version); err != nil {
 		t.Fatalf("read schema version: %v", err)
 	}
-	if version != 2 {
-		t.Fatalf("schema version = %d, want 2", version)
+	if version != 4 {
+		t.Fatalf("schema version = %d, want 4", version)
 	}
 
 	for _, table := range []string{
@@ -107,7 +107,7 @@ func TestOpen_RejectsNewerSchemaVersion(t *testing.T) {
 	db := openRawTestDatabase(t, dsn)
 	if _, err := db.Exec(`
 		CREATE TABLE schema_version (version INTEGER NOT NULL);
-		INSERT INTO schema_version(version) VALUES (3);
+		INSERT INTO schema_version(version) VALUES (5);
 	`); err != nil {
 		t.Fatalf("prepare newer database: %v", err)
 	}
@@ -124,8 +124,8 @@ func TestOpen_RejectsNewerSchemaVersion(t *testing.T) {
 	if err := db.QueryRow(`SELECT version FROM schema_version`).Scan(&version); err != nil {
 		t.Fatalf("read unchanged schema version: %v", err)
 	}
-	if version != 3 {
-		t.Fatalf("schema version = %d, want 3", version)
+	if version != 5 {
+		t.Fatalf("schema version = %d, want 5", version)
 	}
 }
 

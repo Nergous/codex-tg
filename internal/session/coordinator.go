@@ -79,11 +79,12 @@ func (c *Coordinator) Submit(ctx context.Context, thread, prompt string) error {
 func (c *Coordinator) Complete(ctx context.Context, thread, turn string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.turns[thread] == turn {
-		delete(c.turns, thread)
-		if err := c.state.CompleteTurn(ctx, thread); err != nil {
-			return err
-		}
+	if c.turns[thread] != turn {
+		return nil
+	}
+	delete(c.turns, thread)
+	if err := c.state.CompleteTurn(ctx, thread); err != nil {
+		return err
 	}
 	q, err := c.state.Dequeue(ctx, thread)
 	if errors.Is(err, state.ErrQueueEmpty) {

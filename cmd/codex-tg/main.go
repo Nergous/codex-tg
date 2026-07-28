@@ -203,6 +203,7 @@ func runServe([]string) error {
 	service := app.New(supervisor)
 	var coordinator *session.Coordinator
 	var handler *telegram.Handler
+	var codexEvents <-chan codex.Event
 	service.Configure(func(ctx context.Context, path string, fresh bool) (string, error) {
 		if coordinator == nil {
 			return "", errors.New("service initializing")
@@ -219,7 +220,8 @@ func runServe([]string) error {
 		}
 		coordinator = session.New(client, store, cfg.Projects)
 		bot := telegram.NewClient("https://api.telegram.org/bot"+string(token), string(token), nil)
-		handler = telegram.NewHandler(telegram.HandlerOptions{Coordinator: coordinator, Messenger: bot, AllowedUserID: cfg.Telegram.AllowedUserID, AllowedChatID: cfg.Telegram.AllowedChatID, ApprovalService: approval.New(store), ApprovalResponder: client})
+		handler = telegram.NewHandler(telegram.HandlerOptions{Coordinator: coordinator, Messenger: bot, AllowedUserID: cfg.Telegram.AllowedUserID, AllowedChatID: cfg.Telegram.AllowedChatID, ApprovalService: approval.New(store), ApprovalResponder: client, LockStore: store})
+		codexEvents = client.Events()
 		return nil
 	})
 	if err := service.Start(ctx); err != nil {
@@ -230,11 +232,17 @@ func runServe([]string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := service.StartIPC(ctx, controlToken); err != nil {
+	ipcAddress, err := service.StartIPC(ctx, controlToken)
+	if err != nil {
 		return err
 	}
+	runtimePath := app.RuntimePath()
+	if err := app.SaveRuntime(runtimePath, app.RuntimeInfo{IPCURL: ipcAddress, IPCToken: controlToken, CodexBinary: cfg.AppServer.CodexBinary}); err != nil {
+		return err
+	}
+	defer app.RemoveRuntime(runtimePath)
 	bot := telegram.NewClient("https://api.telegram.org/bot"+string(token), string(token), nil)
-	return service.Poll(ctx, pollingStore{client: bot, store: store}, handler.Handle)
+	return service.RunBridge(ctx, pollingStore{client: bot, store: store}, handler.Handle, codexEvents, handler.OnEvent, coordinator.Complete)
 }
 func randomControlToken() (string, error) {
 	raw := make([]byte, 32)
@@ -302,20 +310,12 @@ func runOpen(args []string) error {
 	}
 	projectPath = absolutePath
 
-	endpoint := os.Getenv("CODEX_TG_IPC_URL")
-	if strings.TrimSpace(endpoint) == "" {
-		endpoint = "http://127.0.0.1:4500"
-	}
-	token := os.Getenv("CODEX_TG_IPC_TOKEN")
-	if strings.TrimSpace(token) == "" {
-		return errors.New("missing CODEX_TG_IPC_TOKEN")
-	}
-	binary := os.Getenv("CODEX_TG_CODEX_BINARY")
-	if strings.TrimSpace(binary) == "" {
-		return errors.New("missing CODEX_TG_CODEX_BINARY")
+	runtime, err := loadOpenRuntime()
+	if err != nil {
+		return err
 	}
 
-	client := ipc.NewClient(endpoint, token)
+	client := ipc.NewClient(runtime.IPCURL, runtime.IPCToken)
 	response, err := client.Open(context.Background(), ipc.OpenRequest{
 		ProjectPath: projectPath,
 		NewSession:  newSession,
@@ -324,7 +324,22 @@ func runOpen(args []string) error {
 		return err
 	}
 
-	return launcher.New(binary, response.Endpoint).Run(context.Background(), projectPath, response.ThreadID, response.Token)
+	return launcher.New(runtime.CodexBinary, response.Endpoint).Run(context.Background(), projectPath, response.ThreadID, response.Token)
+}
+
+func loadOpenRuntime() (app.RuntimeInfo, error) {
+	fromEnv := app.RuntimeInfo{
+		IPCURL:      strings.TrimSpace(os.Getenv("CODEX_TG_IPC_URL")),
+		IPCToken:    strings.TrimSpace(os.Getenv("CODEX_TG_IPC_TOKEN")),
+		CodexBinary: strings.TrimSpace(os.Getenv("CODEX_TG_CODEX_BINARY")),
+	}
+	if fromEnv.IPCURL != "" || fromEnv.IPCToken != "" || fromEnv.CodexBinary != "" {
+		if fromEnv.IPCURL == "" || fromEnv.IPCToken == "" || fromEnv.CodexBinary == "" {
+			return app.RuntimeInfo{}, errors.New("incomplete IPC environment configuration")
+		}
+		return fromEnv, nil
+	}
+	return app.LoadRuntime(app.RuntimePath())
 }
 
 func printUsage(w io.Writer) {

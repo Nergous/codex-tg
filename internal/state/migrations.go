@@ -57,6 +57,16 @@ var migrations = []migration{
 			updated_at INTEGER NOT NULL
 		);
 	`},
+	{version: 3, sql: `
+		ALTER TABLE approvals ADD COLUMN resolving INTEGER NOT NULL DEFAULT 0 CHECK(resolving IN (0,1));
+	`},
+	{version: 4, sql: `
+		CREATE TABLE bot_locks (
+			chat_id INTEGER PRIMARY KEY,
+			unlock_nonce TEXT NOT NULL,
+			unlock_expires_at INTEGER NOT NULL
+		);
+	`},
 }
 
 func readSchemaVersion() int {

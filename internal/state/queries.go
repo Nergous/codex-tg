@@ -84,6 +84,27 @@ const (
 		SET resolved = 1, decision = ?
 		WHERE nonce = ? AND resolved = 0 AND chat_id = ? AND expires_at > ?
 	`
+	claimApprovalQuery = `
+		UPDATE approvals
+		SET resolving = 1, decision = ?
+		WHERE nonce = ? AND resolved = 0 AND resolving = 0 AND chat_id = ? AND expires_at > ?
+	`
+	finishApprovalQuery = `
+		UPDATE approvals
+		SET resolved = 1, resolving = 0
+		WHERE nonce = ? AND resolved = 0 AND resolving = 1 AND chat_id = ? AND decision = ?
+	`
+	releaseApprovalQuery = `
+		UPDATE approvals
+		SET resolving = 0, decision = NULL
+		WHERE nonce = ? AND resolved = 0 AND resolving = 1 AND chat_id = ?
+	`
+	setBotLockQuery = `
+		INSERT INTO bot_locks (chat_id, unlock_nonce, unlock_expires_at) VALUES (?, ?, ?)
+		ON CONFLICT(chat_id) DO UPDATE SET unlock_nonce = excluded.unlock_nonce, unlock_expires_at = excluded.unlock_expires_at
+	`
+	isBotLockedQuery = `SELECT EXISTS(SELECT 1 FROM bot_locks WHERE chat_id = ?)`
+	unlockBotQuery   = `DELETE FROM bot_locks WHERE chat_id = ? AND unlock_nonce = ? AND unlock_expires_at > ?`
 )
 
 func (s *Store) PutProject(ctx context.Context, p *models.Project) error {
@@ -380,6 +401,108 @@ func (s *Store) ResolveApproval(ctx context.Context, chatID int64, nonce, decisi
 			delay *= 2
 		}
 	}
+}
+
+func (s *Store) ClaimApproval(ctx context.Context, chatID int64, nonce, decision string) (err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("claim approval: begin transaction: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	var dbChatID, expiresAt int64
+	var resolved, resolving int
+	if err = tx.QueryRowContext(ctx, `SELECT chat_id, resolved, expires_at, resolving FROM approvals WHERE nonce = ?`, nonce).Scan(&dbChatID, &resolved, &expiresAt, &resolving); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("claim approval: %w", ErrNotFound)
+		}
+		return fmt.Errorf("claim approval: read current state: %w", err)
+	}
+
+	now := time.Now().Unix()
+	switch {
+	case dbChatID != chatID:
+		return ErrUnauthorized
+	case expiresAt <= now:
+		return ErrExpired
+	case resolved != 0 || resolving != 0:
+		return ErrAlreadyResolved
+	}
+	res, err := tx.ExecContext(ctx, claimApprovalQuery, decision, nonce, chatID, now)
+	if err != nil {
+		return fmt.Errorf("claim approval: update: %w", err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("claim approval: rows affected: %w", err)
+	}
+	if rows != 1 {
+		return ErrAlreadyResolved
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("claim approval: commit: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) FinishApproval(ctx context.Context, chatID int64, nonce, decision string) error {
+	res, err := s.db.ExecContext(ctx, finishApprovalQuery, nonce, chatID, decision)
+	if err != nil {
+		return fmt.Errorf("finish approval: %w", err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("finish approval rows affected: %w", err)
+	}
+	if rows != 1 {
+		return ErrAlreadyResolved
+	}
+	return nil
+}
+
+func (s *Store) ReleaseApproval(ctx context.Context, chatID int64, nonce string) error {
+	_, err := s.db.ExecContext(ctx, releaseApprovalQuery, nonce, chatID)
+	if err != nil {
+		return fmt.Errorf("release approval: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) SetBotLock(ctx context.Context, chatID int64, nonce string, expiresAt int64) error {
+	if chatID <= 0 || nonce == "" || expiresAt <= time.Now().Unix() {
+		return errors.New("set bot lock: invalid lock")
+	}
+	if _, err := s.db.ExecContext(ctx, setBotLockQuery, chatID, nonce, expiresAt); err != nil {
+		return fmt.Errorf("set bot lock: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) IsBotLocked(ctx context.Context, chatID int64) (bool, error) {
+	var locked bool
+	if err := s.db.QueryRowContext(ctx, isBotLockedQuery, chatID).Scan(&locked); err != nil {
+		return false, fmt.Errorf("check bot lock: %w", err)
+	}
+	return locked, nil
+}
+
+func (s *Store) UnlockBot(ctx context.Context, chatID int64, nonce string, now int64) error {
+	res, err := s.db.ExecContext(ctx, unlockBotQuery, chatID, nonce, now)
+	if err != nil {
+		return fmt.Errorf("unlock bot: %w", err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("unlock bot rows affected: %w", err)
+	}
+	if rows != 1 {
+		return errors.New("unlock bot: invalid or expired nonce")
+	}
+	return nil
 }
 
 func (s *Store) resolveApprovalOnce(ctx context.Context, chatID int64, nonce, decision string) (err error) {

@@ -2,8 +2,11 @@ package main
 
 import (
 	"bytes"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Nergous/codex-tg/internal/app"
 )
 
 func TestRunNotArguments(t *testing.T) {
@@ -38,6 +41,29 @@ func TestRunOpenRequiresConfig(t *testing.T) {
 	if !strings.Contains(stderr.String(), "usage: open [--new] <project_path>") &&
 		!strings.Contains(stderr.String(), "missing CODEX_TG_IPC_TOKEN") {
 		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+func TestLoadOpenRuntimeFallsBackToRuntimeFile(t *testing.T) {
+	t.Setenv("LOCALAPPDATA", t.TempDir())
+	t.Setenv("CODEX_TG_IPC_URL", "")
+	t.Setenv("CODEX_TG_IPC_TOKEN", "")
+	t.Setenv("CODEX_TG_CODEX_BINARY", "")
+	want := app.RuntimeInfo{
+		IPCURL:      "http://127.0.0.1:49152",
+		IPCToken:    "control-token",
+		CodexBinary: filepath.Join(t.TempDir(), "codex.exe"),
+	}
+	if err := app.SaveRuntime(app.RuntimePath(), want); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := loadOpenRuntime()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("runtime=%+v want=%+v", got, want)
 	}
 }
 

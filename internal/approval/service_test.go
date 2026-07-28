@@ -59,6 +59,31 @@ func TestApprovalServiceRejectsExpiredNonce(t *testing.T) {
 		t.Fatalf("Resolve() error = %v, want %v", err, state.ErrExpired)
 	}
 }
+
+func TestResolveWithReleasesNonceWhenResponseFails(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t, time.Now)
+	nonce, err := svc.Request(context.Background(), Request{
+		ChatID:   200,
+		ThreadID: "thr-1",
+		RPCID:    json.RawMessage(`"request-1"`),
+		Kind:     "command",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	responseErr := errors.New("response failed")
+	if err := svc.ResolveWith(context.Background(), 200, nonce, Deny, func() error { return responseErr }); !errors.Is(err, responseErr) {
+		t.Fatalf("first ResolveWith() error=%v want=%v", err, responseErr)
+	}
+	if err := svc.ResolveWith(context.Background(), 200, nonce, Deny, func() error { return nil }); err != nil {
+		t.Fatalf("retry ResolveWith() error=%v", err)
+	}
+	if err := svc.ResolveWith(context.Background(), 200, nonce, Deny, func() error { return nil }); !errors.Is(err, state.ErrAlreadyResolved) {
+		t.Fatalf("replay ResolveWith() error=%v want=%v", err, state.ErrAlreadyResolved)
+	}
+}
 func TestApprovalServiceRejectsUnknownDecision(t *testing.T) {
 	t.Parallel()
 

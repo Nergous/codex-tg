@@ -93,6 +93,10 @@ func (s *Service) Request(ctx context.Context, req Request) (string, error) {
 }
 
 func (s *Service) Resolve(ctx context.Context, chatID int64, nonce string, decision Decision) error {
+	return s.ResolveWith(ctx, chatID, nonce, decision, func() error { return nil })
+}
+
+func (s *Service) ResolveWith(ctx context.Context, chatID int64, nonce string, decision Decision, respond func() error) error {
 	if s.db == nil {
 		return errors.New("approval service: nil store")
 	}
@@ -102,7 +106,17 @@ func (s *Service) Resolve(ctx context.Context, chatID int64, nonce string, decis
 	if decision != ApproveOnce && decision != Deny && decision != CancelTask {
 		return fmt.Errorf("approval service: invalid decision %q", decision)
 	}
-	return s.db.ResolveApproval(ctx, chatID, nonce, string(decision))
+	if respond == nil {
+		return errors.New("approval service: nil responder")
+	}
+	if err := s.db.ClaimApproval(ctx, chatID, nonce, string(decision)); err != nil {
+		return err
+	}
+	if err := respond(); err != nil {
+		_ = s.db.ReleaseApproval(ctx, chatID, nonce)
+		return err
+	}
+	return s.db.FinishApproval(ctx, chatID, nonce, string(decision))
 }
 
 func generateNonce(rng func() ([16]byte, error)) (string, error) {

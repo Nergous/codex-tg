@@ -33,6 +33,53 @@ type Service struct {
 	ipc        *ipc.Server
 }
 
+type CodexEventHandler func(context.Context, codex.Event) error
+type TurnCompleter func(context.Context, string, string) error
+
+func PumpCodexEvents(ctx context.Context, events <-chan codex.Event, handle CodexEventHandler, complete TurnCompleter) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case event, ok := <-events:
+			if !ok {
+				return nil
+			}
+			if err := handle(ctx, event); err != nil {
+				return err
+			}
+			switch event.Method {
+			case "turn/completed", "turn/failed", "turn/interrupted", "turn/faulted":
+				if err := complete(ctx, event.ThreadID, event.TurnID); err != nil {
+					return err
+				}
+			}
+		}
+	}
+}
+
+func (s *Service) RunBridge(
+	ctx context.Context,
+	updates Updates,
+	handleUpdate func(context.Context, telegram.Update) error,
+	events <-chan codex.Event,
+	handleEvent CodexEventHandler,
+	complete TurnCompleter,
+) error {
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	results := make(chan error, 2)
+	go func() { results <- s.Poll(runCtx, updates, handleUpdate) }()
+	go func() { results <- PumpCodexEvents(runCtx, events, handleEvent, complete) }()
+
+	err := <-results
+	if errors.Is(err, context.Canceled) && ctx.Err() == nil {
+		return nil
+	}
+	return err
+}
+
 func New(supervisor Supervisor) *Service { return &Service{supervisor: supervisor} }
 func (s *Service) Start(ctx context.Context) error {
 	s.mu.Lock()
