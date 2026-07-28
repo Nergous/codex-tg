@@ -296,6 +296,7 @@ func (h *Handler) handleCallback(ctx context.Context, chatID int64, callback *Ca
 		if err := h.coordinator.ResumeThread(ctx, payload.threadID); err != nil {
 			return h.notify(ctx, chatID, "cannot resume")
 		}
+		h.withState(chatID, func(state *chatState) { state.thread = payload.threadID })
 		h.bindRenderer(chatID, payload.threadID)
 		return h.notify(ctx, chatID, "resumed")
 	default:
@@ -408,6 +409,8 @@ func (h *Handler) resumeOrList(ctx context.Context, chatID int64, args []string)
 		if err := h.coordinator.ResumeThread(ctx, threadID); err != nil {
 			return h.notify(ctx, chatID, "cannot resume")
 		}
+		h.withState(chatID, func(state *chatState) { state.thread = threadID })
+		h.bindRenderer(chatID, threadID)
 		return h.notify(ctx, chatID, "resumed")
 	}
 

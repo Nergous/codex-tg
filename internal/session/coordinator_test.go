@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/Nergous/codex-tg/internal/models"
@@ -104,4 +105,117 @@ func TestCompleteIgnoresStaleTurn(t *testing.T) {
 	if got, err := c.Status(ctx, "thr-1"); err != nil || got != "running: turn-one" {
 		t.Fatalf("status=%q error=%v", got, err)
 	}
+}
+
+func TestResumeThreadRejectsThreadOutsidePersistedSessions(t *testing.T) {
+	ctx := context.Background()
+	db, err := state.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	project := models.Project{Name: "demo", Path: t.TempDir()}
+	if err := db.PutProject(ctx, &project); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetActiveSession(ctx, &models.Session{ProjectPath: project.Path, ThreadID: "thr-allowed", Active: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	fake := &fakeCodex{}
+	coordinator := New(fake, db, []models.Project{project})
+	if err := coordinator.ResumeThread(ctx, "thr-outside"); !errors.Is(err, state.ErrNotFound) {
+		t.Fatalf("ResumeThread() error = %v, want state.ErrNotFound", err)
+	}
+	if len(fake.resumed) != 0 {
+		t.Fatalf("ResumeThread() called Codex for disallowed thread: %v", fake.resumed)
+	}
+}
+
+func TestResumeThreadRejectsSessionRemovedFromConfiguredAllowList(t *testing.T) {
+	ctx := context.Background()
+	db, err := state.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	staleProject := models.Project{Name: "removed", Path: t.TempDir()}
+	if err := db.PutProject(ctx, &staleProject); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetActiveSession(ctx, &models.Session{ProjectPath: staleProject.Path, ThreadID: "thr-removed", Active: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	configuredProject := models.Project{Name: "configured", Path: t.TempDir()}
+	fake := &fakeCodex{}
+	coordinator := New(fake, db, []models.Project{configuredProject})
+	if err := coordinator.ResumeThread(ctx, "thr-removed"); !errors.Is(err, state.ErrNotFound) {
+		t.Fatalf("ResumeThread() error = %v, want state.ErrNotFound", err)
+	}
+	if len(fake.resumed) != 0 {
+		t.Fatalf("ResumeThread() called Codex for removed project: %v", fake.resumed)
+	}
+}
+
+func TestResumeThreadStartsPersistedQueueInFIFOOrderAfterRecovery(t *testing.T) {
+	ctx := context.Background()
+	db, err := state.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	project := models.Project{Name: "demo", Path: t.TempDir()}
+	if err := db.PutProject(ctx, &project); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetActiveSession(ctx, &models.Session{ProjectPath: project.Path, ThreadID: "thr-1", Active: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetRunningTurn(ctx, "thr-1", "turn-interrupted-by-restart"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Enqueue(ctx, models.QueuedMessage{ThreadID: "thr-1", ChatID: 200, Text: "first"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Enqueue(ctx, models.QueuedMessage{ThreadID: "thr-1", ChatID: 200, Text: "second"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.FaultRunningTurns(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	fake := &fakeCodex{}
+	coordinator := New(fake, db, []models.Project{project})
+	if err := coordinator.ResumeThread(ctx, "thr-1"); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := fake.resumed, []string{"thr-1"}; !sameStrings(got, want) {
+		t.Fatalf("resumed = %v, want %v", got, want)
+	}
+	if got, want := fake.turns, []string{"thr-1:first"}; !sameStrings(got, want) {
+		t.Fatalf("turns = %v, want %v", got, want)
+	}
+
+	if err := coordinator.Complete(ctx, "thr-1", "turn-first"); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := fake.turns, []string{"thr-1:first", "thr-1:second"}; !sameStrings(got, want) {
+		t.Fatalf("turns = %v, want %v", got, want)
+	}
+}
+
+func sameStrings(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
 }

@@ -86,6 +86,10 @@ func (c *Coordinator) Complete(ctx context.Context, thread, turn string) error {
 	if err := c.state.CompleteTurn(ctx, thread); err != nil {
 		return err
 	}
+	return c.startNextQueuedTurn(ctx, thread)
+}
+
+func (c *Coordinator) startNextQueuedTurn(ctx context.Context, thread string) error {
 	q, err := c.state.Dequeue(ctx, thread)
 	if errors.Is(err, state.ErrQueueEmpty) {
 		return nil
@@ -117,7 +121,19 @@ func (c *Coordinator) ListProjects(ctx context.Context) ([]models.Project, error
 	return c.state.ListProjects(ctx)
 }
 func (c *Coordinator) ResumeThread(ctx context.Context, threadID string) error {
-	return c.codex.ResumeThread(ctx, threadID)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if _, err := c.findSession(ctx, threadID); err != nil {
+		return err
+	}
+	if err := c.codex.ResumeThread(ctx, threadID); err != nil {
+		return err
+	}
+	if c.turns[threadID] != "" {
+		return nil
+	}
+	return c.startNextQueuedTurn(ctx, threadID)
 }
 func (c *Coordinator) Status(_ context.Context, threadID string) (string, error) {
 	c.mu.Lock()
@@ -158,6 +174,9 @@ func (c *Coordinator) findSession(ctx context.Context, threadID string) (models.
 		return models.Session{}, err
 	}
 	for _, p := range projects {
+		if _, allowed := c.projects[p.Path]; !allowed {
+			continue
+		}
 		s, err := c.state.ActiveSession(ctx, p.Path)
 		if err == nil && s.ThreadID == threadID {
 			return s, nil

@@ -704,6 +704,37 @@ func TestResumeListsAtMostTenSessions(t *testing.T) {
 	}
 }
 
+func TestResumeAllowsPersistedSessionAfterHandlerRestart(t *testing.T) {
+	t.Parallel()
+	handler, coord, messenger, _ := newFixture(t, 100, 200)
+
+	if err := handler.Handle(context.Background(), messageUpdate(100, 200, "private", "/resume thr-persisted")); err != nil {
+		t.Fatalf("Handle() error = %v", err)
+	}
+
+	coord.mu.Lock()
+	resumeCalls := append([]string(nil), coord.resumeCalls...)
+	coord.mu.Unlock()
+	if len(resumeCalls) != 1 || resumeCalls[0] != "thr-persisted" {
+		t.Fatalf("ResumeThread() calls = %v, want [thr-persisted]", resumeCalls)
+	}
+	if got := messenger.lastSendText(); got != "resumed" {
+		t.Fatalf("response = %q, want resumed", got)
+	}
+	if got := handler.threadChat("thr-persisted"); got != 200 {
+		t.Fatalf("renderer chat = %d, want 200", got)
+	}
+
+	if err := handler.Handle(context.Background(), messageUpdate(100, 200, "private", "continue")); err != nil {
+		t.Fatalf("prompt after resume error = %v", err)
+	}
+	coord.mu.Lock()
+	defer coord.mu.Unlock()
+	if len(coord.submitCalls) != 1 || coord.submitCalls[0].threadID != "thr-persisted" {
+		t.Fatalf("prompt thread = %#v, want thr-persisted", coord.submitCalls)
+	}
+}
+
 func TestHandlerDiffDefaultUsesSummary(t *testing.T) {
 	t.Parallel()
 	handler, coord, messenger, _ := newFixture(t, 100, 200)

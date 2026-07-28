@@ -47,6 +47,10 @@ var commands = map[string]commandHandler{
 	"autostart": runAutostart,
 }
 
+var launchTUI = func(ctx context.Context, binary, endpoint, cwd, threadID, token string) error {
+	return launcher.New(binary, endpoint).Run(ctx, cwd, threadID, token)
+}
+
 func runSetup([]string) error {
 	reader := bufio.NewReader(os.Stdin)
 	read := func(label string) (string, error) {
@@ -324,7 +328,7 @@ func runOpen(args []string) error {
 		return err
 	}
 
-	return launcher.New(runtime.CodexBinary, response.Endpoint).Run(context.Background(), projectPath, response.ThreadID, response.Token)
+	return launchTUI(context.Background(), runtime.CodexBinary, response.Endpoint, projectPath, response.ThreadID, response.Token)
 }
 
 func loadOpenRuntime() (app.RuntimeInfo, error) {

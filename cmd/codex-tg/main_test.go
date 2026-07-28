@@ -2,11 +2,13 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/Nergous/codex-tg/internal/app"
+	"github.com/Nergous/codex-tg/internal/codex"
 )
 
 func TestRunNotArguments(t *testing.T) {
@@ -85,5 +87,54 @@ func TestRunHelp(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "usage:") || stderr.Len() != 0 {
 		t.Fatalf("stdout = %q, stderr = %q", stdout.String(), stderr.String())
+	}
+}
+
+type openSupervisor struct{}
+
+func (openSupervisor) Start(context.Context) (codex.AppServerEndpoint, error) {
+	return codex.AppServerEndpoint{URL: "ws://127.0.0.1:4500", Token: "runtime-token"}, nil
+}
+
+func (openSupervisor) Stop() error { return nil }
+
+func TestRunOpenLaunchesServiceCreatedThread(t *testing.T) {
+	ctx := context.Background()
+	projectPath := t.TempDir()
+	service := app.New(openSupervisor{})
+	service.Configure(func(_ context.Context, path string, fresh bool) (string, error) {
+		if path != projectPath || fresh {
+			t.Fatalf("open path=%q fresh=%t", path, fresh)
+		}
+		return "thr-service-created", nil
+	}, nil, nil)
+	if err := service.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = service.Stop(context.Background()) })
+
+	ipcURL, err := service.StartIPC(ctx, "control-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CODEX_TG_IPC_URL", ipcURL)
+	t.Setenv("CODEX_TG_IPC_TOKEN", "control-token")
+	t.Setenv("CODEX_TG_CODEX_BINARY", "codex.exe")
+
+	originalLaunch := launchTUI
+	t.Cleanup(func() { launchTUI = originalLaunch })
+	var launched struct {
+		binary, endpoint, cwd, threadID, token string
+	}
+	launchTUI = func(_ context.Context, binary, endpoint, cwd, threadID, token string) error {
+		launched.binary, launched.endpoint, launched.cwd, launched.threadID, launched.token = binary, endpoint, cwd, threadID, token
+		return nil
+	}
+
+	if err := runOpen([]string{projectPath}); err != nil {
+		t.Fatal(err)
+	}
+	if launched.binary != "codex.exe" || launched.endpoint != "ws://127.0.0.1:4500" || launched.cwd != projectPath || launched.threadID != "thr-service-created" || launched.token != "runtime-token" {
+		t.Fatalf("launch=%+v", launched)
 	}
 }
