@@ -5,7 +5,7 @@ an authorized Telegram private chat. Its goal is to let one operator continue
 the same Codex thread from either interface without exposing Codex App Server
 to the network.
 
-Version `v0.1.2` provides the complete single-operator bridge lifecycle:
+Version `v0.1.3` provides the complete single-operator bridge lifecycle:
 setup, supervised App Server startup, Telegram polling, shared threads, queued
 prompts, approvals, recovery, local TUI attachment, and per-user autostart. It
 is considered beta while the upstream Codex App Server protocol remains

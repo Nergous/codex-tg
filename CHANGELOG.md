@@ -7,6 +7,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-07-28
+
+### Fixed
+
+- Accept boolean Telegram Bot API results for operations whose response body is
+  intentionally ignored, allowing `setup` to complete after deleting a webhook.
+
 ## [0.1.2] - 2026-07-28
 
 ### Changed

@@ -137,7 +137,7 @@ func (c *Client) Edit(ctx context.Context, chatID, messageID int64, text string,
 		ReplyMarkup: keyboard,
 		ParseMode:   opts.ParseMode,
 	}
-	return c.call(ctx, "editMessageText", request, &struct{}{})
+	return c.call(ctx, "editMessageText", request, nil)
 }
 
 func (c *Client) AnswerCallback(ctx context.Context, callbackID, text string) error {
@@ -148,11 +148,11 @@ func (c *Client) AnswerCallback(ctx context.Context, callbackID, text string) er
 		CallbackQueryID: callbackID,
 		Text:            text,
 	}
-	return c.call(ctx, "answerCallbackQuery", request, &struct{}{})
+	return c.call(ctx, "answerCallbackQuery", request, nil)
 }
 
 func (c *Client) DeleteWebhook(ctx context.Context) error {
-	return c.call(ctx, "deleteWebhook", map[string]bool{}, &struct{}{})
+	return c.call(ctx, "deleteWebhook", map[string]bool{}, nil)
 }
 
 func (c *Client) GetMe(ctx context.Context) (User, error) {

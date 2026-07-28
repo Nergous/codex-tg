@@ -159,6 +159,7 @@ func TestClient_EditAndDelete(t *testing.T) {
 	t.Parallel()
 
 	fake := testutil.NewFakeTelegram(t)
+	fake.EnqueueResponse("deleteWebhook", http.StatusOK, `{"ok":true,"result":true}`)
 	client := NewClient(fake.URL(), fake.Token(), fake.HTTPClient())
 
 	if err := client.Edit(context.Background(), 1, 2, "updated", nil, MessageOptions{}); err != nil {
