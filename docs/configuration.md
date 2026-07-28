@@ -5,6 +5,12 @@ or the Linux Secret Service under `codex-tg/telegram-bot-token`. It writes the
 non-secret configuration to `%LOCALAPPDATA%\codex-tg\config.json` on Windows
 or `$XDG_CONFIG_HOME/codex-tg/config.json` on Linux.
 
+Setup progress is stored beside it as `onboarding.json`; interrupted setup
+resumes from its first incomplete step. The token remains only in the platform
+credential store. Windows installs to
+`%LOCALAPPDATA%\Programs\codex-tg\bin`; Linux uses `$XDG_BIN_HOME` or
+`~/.local/bin`. If PATH update fails, add that exact directory manually.
+
 ```json
 {
   "telegram": {"allowed_user_id": 1, "allowed_chat_id": 1},
@@ -25,7 +31,8 @@ queued prompts remain paused and are never replayed automatically. Use
 Logs must never contain bot or App Server tokens. If Codex compatibility probe
 fails, update Codex and restart; the bridge fails closed.
 
-Troubleshooting: confirm `codex --version`, use `codex-tg status` with the
+Troubleshooting: confirm `codex --version`, run `codex-tg serve` for foreground
+recovery after readiness timeout, use `codex-tg status` with the
 local IPC environment variables, verify the configured user/chat IDs, and
 ensure no webhook remains on the bot. `autostart status` checks the per-user
 `CodexTgBridge` scheduled task or `codex-tg.service` systemd user unit.

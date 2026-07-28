@@ -24,7 +24,7 @@ One `codex-tg serve` process:
 3. Coordinate projects, Codex threads, turns, and approvals.
 4. Persist non-secret state in SQLite.
 
-`codex-tg open <path>` asks the service to start or resume a thread and
+`codex-tg` asks the service to start or resume the current directory and
 then launch the local Codex TUI on that exact thread.
 
 ## Security model
@@ -105,21 +105,27 @@ The Telegram bot token must not be placed in this file.
 
 ## Usage
 
-### 1. Initial setup
+### 1. Initial setup and daily use
 
 Run the interactive setup once:
 
 ```console
-codex-tg setup
+cd project
+codex-tg
 ```
 
-It validates the Telegram bot, stores its token in the system credential store,
-and writes non-secret configuration to
+On first run, the wizard optionally installs the executable for the current
+user, validates and pairs the Telegram bot from a new private `/start`, offers
+per-user autostart, confirms the current project, and writes non-secret state to
 `%LOCALAPPDATA%\codex-tg\config.json` on Windows or
 `$XDG_CONFIG_HOME/codex-tg/config.json` on Linux (normally
 `~/.config/codex-tg/config.json`).
 
-### 2. Start the bridge
+Later runs confirm any new current directory, start an unavailable configured
+service, and open Codex. `codex-tg setup`, `serve`, `open`, `project`, `status`,
+and `autostart` remain available for recovery and scripting.
+
+### 2. Start the bridge manually
 
 ```console
 codex-tg serve
@@ -154,7 +160,7 @@ are consumed by the shell before `codex-tg` receives the path.
 Run this in another terminal while `codex-tg serve` is active:
 
 ```console
-codex-tg open D:/Files/go/codex-tg
+codex-tg open
 codex-tg open --new D:/Files/go/codex-tg
 ```
 

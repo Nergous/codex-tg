@@ -9,20 +9,25 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Nergous/codex-tg/internal/app"
 	"github.com/Nergous/codex-tg/internal/approval"
 	"github.com/Nergous/codex-tg/internal/autostart"
 	"github.com/Nergous/codex-tg/internal/codex"
 	"github.com/Nergous/codex-tg/internal/config"
+	"github.com/Nergous/codex-tg/internal/install"
 	"github.com/Nergous/codex-tg/internal/ipc"
 	"github.com/Nergous/codex-tg/internal/launcher"
 	"github.com/Nergous/codex-tg/internal/models"
+	"github.com/Nergous/codex-tg/internal/onboarding"
+	"github.com/Nergous/codex-tg/internal/pairing"
 	"github.com/Nergous/codex-tg/internal/secrets"
+	background "github.com/Nergous/codex-tg/internal/service"
 	"github.com/Nergous/codex-tg/internal/session"
 	"github.com/Nergous/codex-tg/internal/state"
 	"github.com/Nergous/codex-tg/internal/telegram"
@@ -49,55 +54,160 @@ var launchTUI = func(ctx context.Context, binary, endpoint, cwd, threadID, token
 	return launcher.New(binary, endpoint).Run(ctx, cwd, threadID, token)
 }
 
+var (
+	getwd         = os.Getwd
+	primaryFlow   = runPrimaryFlow
+	ensureRuntime = func(ctx context.Context) (app.RuntimeInfo, error) {
+		return background.DefaultManager(app.RuntimePath()).Ensure(ctx)
+	}
+)
+
 func runSetup([]string) error {
 	reader := bufio.NewReader(os.Stdin)
 	read := func(label string) (string, error) {
 		fmt.Fprint(os.Stdout, label)
 		value, err := reader.ReadString('\n')
+		if errors.Is(err, io.EOF) && value != "" {
+			err = nil
+		}
 		return strings.TrimSpace(value), err
 	}
-	token, err := readSecret("Telegram bot token: ")
+	yes := func(label string, defaultYes bool) (bool, error) {
+		value, err := read(label)
+		if err != nil {
+			return false, err
+		}
+		if value == "" {
+			return defaultYes, nil
+		}
+		value = strings.ToLower(value)
+		return value == "y" || value == "yes", nil
+	}
+	progress, err := onboarding.LoadState(app.OnboardingPath())
 	if err != nil {
 		return err
 	}
-	user, err := read("Allowed Telegram user ID: ")
-	if err != nil {
-		return err
+	checkpoint := func() error { return onboarding.SaveState(app.OnboardingPath(), progress) }
+
+	if !progress.CommandLineComplete {
+		approved, err := yes("Install codex-tg for current user? [y/N]: ", false)
+		if err != nil {
+			return err
+		}
+		if approved {
+			source, err := os.Executable()
+			if err != nil {
+				return err
+			}
+			target, err := install.Target()
+			if err != nil {
+				return err
+			}
+			if err := install.CopyExecutable(source, target, true); err != nil {
+				return err
+			}
+			if err := install.AddToUserPath(filepath.Dir(target)); err != nil {
+				fmt.Fprintf(os.Stderr, "PATH update failed: %v\nAdd manually: %s\n", err, filepath.Dir(target))
+			}
+		}
+		progress.CommandLineComplete = true
+		if err := checkpoint(); err != nil {
+			return err
+		}
 	}
-	userID, err := strconv.ParseInt(user, 10, 64)
-	if err != nil {
-		return err
+
+	var cfg *config.Config
+	if progress.TelegramComplete {
+		cfg, err = config.Load(app.ConfigPath())
+		if err != nil {
+			return err
+		}
 	}
-	chat, err := read("Allowed private chat ID: ")
-	if err != nil {
-		return err
+	for !progress.TelegramComplete {
+		token, err := readSecret("Telegram bot token: ")
+		if err != nil {
+			return err
+		}
+		bot := telegram.NewClient("https://api.telegram.org/bot"+token, token, nil)
+		for {
+			pairCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			identity, pairErr := pairing.Pair(pairCtx, bot, func(bot pairing.BotIdentity, sender pairing.Identity) (bool, error) {
+				return yes(fmt.Sprintf("Bind @%s to Telegram @%s (user %d, chat %d)? [y/N]: ", bot.Username, sender.Username, sender.UserID, sender.ChatID), false)
+			})
+			cancel()
+			if pairErr != nil {
+				retry, readErr := yes(fmt.Sprintf("Pairing failed: %v. Retry? [Y/n]: ", pairErr), true)
+				if readErr != nil {
+					return readErr
+				}
+				if retry {
+					continue
+				}
+				return pairErr
+			}
+			binary, err := exec.LookPath("codex")
+			if err != nil {
+				return errors.New("codex executable not found in PATH; install Codex and run `codex-tg setup` again")
+			}
+			binary, err = filepath.Abs(binary)
+			if err != nil {
+				return err
+			}
+			cfg = &config.Config{Telegram: config.TelegramConfig{AllowedUserID: identity.UserID, AllowedChatID: identity.ChatID}, AppServer: config.AppServerConfig{Listen: "127.0.0.1:4500", CodexBinary: binary}, Projects: []models.Project{}}
+			if err := secrets.NewSystemStore().Set(context.Background(), secrets.TelegramBotToken, []byte(token)); err != nil {
+				return err
+			}
+			if err := config.Save(app.ConfigPath(), cfg); err != nil {
+				return err
+			}
+			progress.TelegramComplete = true
+			if err := checkpoint(); err != nil {
+				return err
+			}
+			break
+		}
 	}
-	chatID, err := strconv.ParseInt(chat, 10, 64)
-	if err != nil {
-		return err
+
+	if !progress.ServiceComplete {
+		approved, err := yes("Enable background service autostart? [Y/n]: ", true)
+		if err != nil {
+			return err
+		}
+		if approved {
+			executable, err := os.Executable()
+			if err != nil {
+				return err
+			}
+			scheduler := autostart.Scheduler{Executable: executable, WorkDir: filepath.Dir(app.ConfigPath())}
+			if err := scheduler.Install(context.Background()); err != nil {
+				fmt.Fprintf(os.Stderr, "Autostart failed: %v\nUse `codex-tg serve` for foreground mode.\n", err)
+			}
+		}
+		progress.ServiceComplete = true
+		if err := checkpoint(); err != nil {
+			return err
+		}
 	}
-	name, err := read("First project name: ")
-	if err != nil {
-		return err
+	if !progress.ProjectComplete {
+		cwd, err := getwd()
+		if err != nil {
+			return err
+		}
+		_, added, err := onboarding.EnsureProject(cfg, cwd, func(prompt string) (bool, error) { return yes(strings.Replace(prompt, "[y/N]", "[Y/n]", 1), true) })
+		if err != nil {
+			return err
+		}
+		if added {
+			if err := config.Save(app.ConfigPath(), cfg); err != nil {
+				return err
+			}
+		}
+		progress.ProjectComplete = true
+		if err := checkpoint(); err != nil {
+			return err
+		}
 	}
-	projectPath, err := read("First project path: ")
-	if err != nil {
-		return err
-	}
-	listen, err := read("App Server listen [127.0.0.1:4500]: ")
-	if err != nil {
-		return err
-	}
-	if listen == "" {
-		listen = "127.0.0.1:4500"
-	}
-	binary, err := read("Codex executable: ")
-	if err != nil {
-		return err
-	}
-	cfg := &config.Config{Telegram: config.TelegramConfig{AllowedUserID: userID, AllowedChatID: chatID}, AppServer: config.AppServerConfig{Listen: listen, CodexBinary: binary}, Projects: []models.Project{{Name: name, Path: projectPath}}}
-	bot := telegram.NewClient("https://api.telegram.org/bot"+token, token, nil)
-	return app.Setup(context.Background(), bot, secrets.NewSystemStore(), []byte(token), app.ConfigPath(), cfg)
+	return nil
 }
 
 func runStatus([]string) error {
@@ -301,8 +411,11 @@ func main() {
 
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		printUsage(stderr)
-		return exitUsage
+		if err := primaryFlow(); err != nil {
+			fmt.Fprintf(stderr, "codex-tg: %v\n", err)
+			return exitError
+		}
+		return exitOK
 	}
 
 	if args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
@@ -336,12 +449,19 @@ func runOpen(args []string) error {
 		}
 	}
 
-	if len(args) != 1 {
-		return fmt.Errorf("usage: open [--new] <project_path>")
+	if len(args) > 1 {
+		return fmt.Errorf("usage: open [--new] [project_path]")
 	}
-	projectPath := strings.TrimSpace(args[0])
+	projectPath := ""
+	if len(args) == 1 {
+		projectPath = strings.TrimSpace(args[0])
+	}
 	if projectPath == "" {
-		return fmt.Errorf("project path is required")
+		var err error
+		projectPath, err = getwd()
+		if err != nil {
+			return fmt.Errorf("resolve current directory: %w", err)
+		}
 	}
 	absolutePath, err := filepath.Abs(projectPath)
 	if err != nil {
@@ -367,6 +487,53 @@ func runOpen(args []string) error {
 	return launchTUI(context.Background(), runtime.CodexBinary, response.Endpoint, projectPath, response.ThreadID, response.Token)
 }
 
+func runPrimaryFlow() error {
+	cwd, err := getwd()
+	if err != nil {
+		return fmt.Errorf("resolve current directory: %w", err)
+	}
+	cfg, err := config.Load(app.ConfigPath())
+	if errors.Is(err, config.ErrConfigNotFound) {
+		if err := runSetup(nil); err != nil {
+			return err
+		}
+		cfg, err = config.Load(app.ConfigPath())
+	}
+	if err != nil {
+		return err
+	}
+	reader := bufio.NewReader(os.Stdin)
+	project, added, err := onboarding.EnsureProject(cfg, cwd, func(prompt string) (bool, error) {
+		fmt.Fprint(os.Stdout, prompt)
+		answer, readErr := reader.ReadString('\n')
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			return false, readErr
+		}
+		answer = strings.ToLower(strings.TrimSpace(answer))
+		return answer == "y" || answer == "yes", nil
+	})
+	if err != nil {
+		return err
+	}
+	if added {
+		if err := config.Save(app.ConfigPath(), cfg); err != nil {
+			return err
+		}
+	} else {
+		found := false
+		for _, configured := range cfg.Projects {
+			if configured.Path == project.Path {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return errors.New("current project is not registered")
+		}
+	}
+	return runOpen([]string{cwd})
+}
+
 func loadOpenRuntime() (app.RuntimeInfo, error) {
 	fromEnv := app.RuntimeInfo{
 		IPCURL:      strings.TrimSpace(os.Getenv("CODEX_TG_IPC_URL")),
@@ -379,9 +546,9 @@ func loadOpenRuntime() (app.RuntimeInfo, error) {
 		}
 		return fromEnv, nil
 	}
-	return app.LoadRuntime(app.RuntimePath())
+	return ensureRuntime(context.Background())
 }
 
 func printUsage(w io.Writer) {
-	fmt.Fprintln(w, "usage: codex-tg <setup|serve|open [--new] <path>|project|status|autostart>")
+	fmt.Fprintln(w, "usage: codex-tg [setup|serve|open [--new] [path]|project|status|autostart]")
 }

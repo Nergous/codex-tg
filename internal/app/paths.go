@@ -20,3 +20,5 @@ func DataPath() string {
 func RuntimePath() string {
 	return filepath.Join(filepath.Dir(ConfigPath()), "runtime.json")
 }
+
+func OnboardingPath() string { return filepath.Join(filepath.Dir(ConfigPath()), "onboarding.json") }

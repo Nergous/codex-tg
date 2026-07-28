@@ -7,6 +7,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- Add resumable first-run pairing, per-user command installation, autostart,
+  confirmed current-project registration, safe service startup, and
+  no-argument current-directory opening.
+
 ## [0.1.4] - 2026-07-28
 
 ### Added
