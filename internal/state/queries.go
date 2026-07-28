@@ -20,6 +20,13 @@ var ErrExpired = errors.New("approval expired")
 
 const updateOffsetKey = "telegram_update_offset"
 
+const (
+	setRunningTurnQuery    = `INSERT INTO turns(thread_id, turn_id, state, updated_at) VALUES (?, ?, 'running', ?) ON CONFLICT(thread_id) DO UPDATE SET turn_id=excluded.turn_id, state='running', updated_at=excluded.updated_at`
+	faultRunningTurnsQuery = `UPDATE turns SET state='faulted', updated_at=? WHERE state='running'`
+	completeTurnQuery      = `UPDATE turns SET state='completed', updated_at=? WHERE thread_id=? AND state='running'`
+	turnStateQuery         = `SELECT state FROM turns WHERE thread_id=?`
+)
+
 const sqliteLockRetryTimeout = 5 * time.Second
 const maxSQLiteLockRetryDelay = 16 * time.Millisecond
 
@@ -297,6 +304,29 @@ func (s *Store) UpdateOffset(ctx context.Context) (int64, error) {
 		return 0, fmt.Errorf("load update offset: %w", err)
 	}
 	return offset, nil
+}
+
+func (s *Store) SetRunningTurn(ctx context.Context, threadID, turnID string) error {
+	_, err := s.db.ExecContext(ctx, setRunningTurnQuery, threadID, turnID, time.Now().Unix())
+	return err
+}
+
+func (s *Store) FaultRunningTurns(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, faultRunningTurnsQuery, time.Now().Unix())
+	return err
+}
+
+func (s *Store) CompleteTurn(ctx context.Context, threadID string) error {
+	_, err := s.db.ExecContext(ctx, completeTurnQuery, time.Now().Unix(), threadID)
+	return err
+}
+
+func (s *Store) TurnState(ctx context.Context, threadID string) (string, error) {
+	var value string
+	if err := s.db.QueryRowContext(ctx, turnStateQuery, threadID).Scan(&value); err != nil {
+		return "", err
+	}
+	return value, nil
 }
 
 func (s *Store) CreateApproval(ctx context.Context, approval *models.Approval) error {

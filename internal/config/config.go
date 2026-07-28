@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 
 	"github.com/Nergous/codex-tg/internal/models"
 )
@@ -11,6 +12,20 @@ type Config struct {
 	Telegram  TelegramConfig   `json:"telegram"`
 	AppServer AppServerConfig  `json:"app_server"`
 	Projects  []models.Project `json:"projects"`
+}
+
+func Save(path string, cfg *Config) error {
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(data, '\n'), 0o600)
 }
 
 func Load(path string) (*Config, error) {

@@ -49,6 +49,14 @@ type migration struct {
 
 var migrations = []migration{
 	{version: 1, sql: schemaV1},
+	{version: 2, sql: `
+		CREATE TABLE turns (
+			thread_id TEXT PRIMARY KEY REFERENCES sessions(thread_id),
+			turn_id TEXT NOT NULL,
+			state TEXT NOT NULL CHECK(state IN ('running','faulted','completed')),
+			updated_at INTEGER NOT NULL
+		);
+	`},
 }
 
 func readSchemaVersion() int {

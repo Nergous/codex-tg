@@ -1,0 +1,159 @@
+package app
+
+import (
+	"context"
+	"errors"
+	"sync"
+
+	"github.com/Nergous/codex-tg/internal/codex"
+	"github.com/Nergous/codex-tg/internal/ipc"
+	"github.com/Nergous/codex-tg/internal/telegram"
+)
+
+var ErrNotStarted = errors.New("service not started")
+
+type Supervisor interface {
+	Start(context.Context) (codex.AppServerEndpoint, error)
+	Stop() error
+}
+type Updates interface {
+	GetUpdates(context.Context, int64) ([]telegram.Update, error)
+	UpdateOffset(context.Context) (int64, error)
+	SaveUpdateOffset(context.Context, int64) error
+}
+
+type Service struct {
+	supervisor Supervisor
+	mu         sync.Mutex
+	endpoint   codex.AppServerEndpoint
+	started    bool
+	open       func(context.Context, string, bool) (string, error)
+	recover    func(context.Context) error
+	afterStart func(context.Context, codex.AppServerEndpoint) error
+	ipc        *ipc.Server
+}
+
+func New(supervisor Supervisor) *Service { return &Service{supervisor: supervisor} }
+func (s *Service) Start(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.started {
+		return nil
+	}
+	if s.recover != nil {
+		if err := s.recover(ctx); err != nil {
+			return err
+		}
+	}
+	endpoint, err := s.supervisor.Start(ctx)
+	if err != nil {
+		return err
+	}
+	s.endpoint = endpoint
+	if s.afterStart != nil {
+		if err := s.afterStart(ctx, endpoint); err != nil {
+			_ = s.supervisor.Stop()
+			s.endpoint = codex.AppServerEndpoint{}
+			return err
+		}
+	}
+	s.started = true
+	return nil
+}
+
+func (s *Service) Configure(open func(context.Context, string, bool) (string, error), recover func(context.Context) error, afterStart func(context.Context, codex.AppServerEndpoint) error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.open = open
+	s.recover = recover
+	s.afterStart = afterStart
+}
+func (s *Service) Stop(context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.started {
+		return nil
+	}
+	if s.ipc != nil {
+		_ = s.ipc.Close()
+		s.ipc = nil
+	}
+	err := s.supervisor.Stop()
+	s.started = false
+	s.endpoint = codex.AppServerEndpoint{}
+	return err
+}
+func (s *Service) StartIPC(ctx context.Context, token string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.started {
+		return "", ErrNotStarted
+	}
+	if s.ipc != nil {
+		return s.ipc.Address(), nil
+	}
+	server := ipc.NewServer(s, token)
+	address, err := server.Start(ctx)
+	if err != nil {
+		return "", err
+	}
+	s.ipc = server
+	return address, nil
+}
+func (s *Service) Endpoint() (codex.AppServerEndpoint, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.started {
+		return codex.AppServerEndpoint{}, ErrNotStarted
+	}
+	return s.endpoint, nil
+}
+func (s *Service) Open(ctx context.Context, req ipc.OpenRequest) (ipc.OpenResponse, error) {
+	endpoint, err := s.Endpoint()
+	if err != nil {
+		return ipc.OpenResponse{}, err
+	}
+	if s.open == nil {
+		return ipc.OpenResponse{}, errors.New("open service not configured")
+	}
+	thread, err := s.open(ctx, req.ProjectPath, req.NewSession)
+	if err != nil {
+		return ipc.OpenResponse{}, err
+	}
+	return ipc.OpenResponse{ThreadID: thread, Endpoint: endpoint.URL, Token: endpoint.Token}, nil
+}
+func (s *Service) Status(context.Context) (ipc.StatusResponse, error) {
+	endpoint, err := s.Endpoint()
+	if err != nil {
+		return ipc.StatusResponse{}, err
+	}
+	return ipc.StatusResponse{Running: endpoint.URL != ""}, nil
+}
+func (s *Service) PollOnce(ctx context.Context, updates Updates, handle func(context.Context, telegram.Update) error) error {
+	offset, err := updates.UpdateOffset(ctx)
+	if err != nil {
+		return err
+	}
+	batch, err := updates.GetUpdates(ctx, offset)
+	if err != nil {
+		return err
+	}
+	for _, update := range batch {
+		if err := handle(ctx, update); err != nil {
+			return err
+		}
+		if err := updates.SaveUpdateOffset(ctx, update.UpdateID+1); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) Poll(ctx context.Context, updates Updates, handle func(context.Context, telegram.Update) error) error {
+	for ctx.Err() == nil {
+		if err := s.PollOnce(ctx, updates, handle); err != nil {
+			return err
+		}
+	}
+	return ctx.Err()
+}
