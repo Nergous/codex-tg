@@ -28,6 +28,7 @@ var (
 	ErrAlreadyInitialized    = errors.New("already initialized")
 	ErrDisconnected          = errors.New("app server disconnected")
 	ErrThreadRolloutNotFound = errors.New("thread rollout not found")
+	ErrThreadRolloutNotReady = errors.New("thread rollout not ready")
 	ErrInvalidRPCFrame       = errors.New("invalid rpc frame")
 	ErrInvalidRequestID      = errors.New("invalid request id")
 )
@@ -162,6 +163,9 @@ func (c *Client) ResumeThread(ctx context.Context, threadID string) error {
 		if isThreadRolloutNotFound(err) {
 			return fmt.Errorf("%w: %v", ErrThreadRolloutNotFound, err)
 		}
+		if isThreadRolloutNotReady(err) {
+			return fmt.Errorf("%w: %v", ErrThreadRolloutNotReady, err)
+		}
 		return err
 	}
 	if out.Thread.ID != threadID {
@@ -174,6 +178,17 @@ func isThreadRolloutNotFound(err error) bool {
 	var rpcErr *RPCError
 	return errors.As(err, &rpcErr) &&
 		strings.Contains(strings.ToLower(rpcErr.Message), "no rollout found for thread id")
+}
+
+func isThreadRolloutNotReady(err error) bool {
+	var rpcErr *RPCError
+	if !errors.As(err, &rpcErr) {
+		return false
+	}
+	message := strings.ToLower(rpcErr.Message)
+	return strings.Contains(message, "failed to read session metadata") &&
+		strings.Contains(message, "rollout at ") &&
+		strings.Contains(message, " is empty")
 }
 
 func (c *Client) StartTurn(ctx context.Context, threadID, prompt string) (string, error) {

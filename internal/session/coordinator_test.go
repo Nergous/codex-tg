@@ -56,6 +56,27 @@ func TestOpenProjectReusesPersistedThread(t *testing.T) {
 	}
 }
 
+func TestAddProjectAllowsInteractiveOpen(t *testing.T) {
+	ctx := context.Background()
+	db, err := state.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	c := New(&fakeCodex{}, db, nil)
+	project := models.Project{Name: "new", Path: t.TempDir(), Enabled: true}
+	if err := c.AddProject(ctx, project); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.PrepareProject(project.Path); err != nil {
+		t.Fatalf("PrepareProject: %v", err)
+	}
+	projects, err := db.ListProjects(ctx)
+	if err != nil || len(projects) != 1 || projects[0].Path != project.Path {
+		t.Fatalf("projects=%v err=%v", projects, err)
+	}
+}
+
 func TestOpenProjectStartsNewThreadWhenPersistedRolloutIsMissing(t *testing.T) {
 	ctx := context.Background()
 	db, err := state.Open(ctx, ":memory:")
@@ -142,6 +163,32 @@ func TestSubmitSubscribesToAdoptedThreadAfterRolloutMaterializes(t *testing.T) {
 	}
 	if got, want := fake.turns, []string{"thr-tui:hello"}; !sameStrings(got, want) {
 		t.Fatalf("turns = %v, want %v", got, want)
+	}
+}
+
+func TestSubmitRetriesAdoptedThreadWhileRolloutIsEmpty(t *testing.T) {
+	ctx := context.Background()
+	db, err := state.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	project := models.Project{Name: "demo", Path: t.TempDir()}
+	if err := db.PutProject(ctx, &project); err != nil {
+		t.Fatal(err)
+	}
+
+	fake := &fakeCodex{resumeErrors: []error{codex.ErrThreadRolloutNotReady, nil}}
+	coordinator := New(fake, db, []models.Project{project})
+	coordinator.subscriptionDelay = 0
+	if err := coordinator.AdoptThread(ctx, project.Path, "thr-tui"); err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.Submit(ctx, "thr-tui", "hello"); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := fake.resumed, []string{"thr-tui", "thr-tui"}; !sameStrings(got, want) {
+		t.Fatalf("resumed = %v, want %v", got, want)
 	}
 }
 

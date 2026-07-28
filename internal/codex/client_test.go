@@ -38,6 +38,18 @@ func TestIsThreadRolloutNotFound(t *testing.T) {
 	}
 }
 
+func TestIsThreadRolloutNotReady(t *testing.T) {
+	err := &RPCError{
+		Code: -32603,
+		Message: "thread-store internal error: failed to read session metadata " +
+			`C:\Users\test\.codex\sessions\rollout.jsonl: rollout at ` +
+			`C:\Users\test\.codex\sessions\rollout.jsonl is empty`,
+	}
+	if !isThreadRolloutNotReady(err) {
+		t.Fatal("isThreadRolloutNotReady() = false, want true")
+	}
+}
+
 func TestClientParsesNestedThreadStartedEvent(t *testing.T) {
 	fake := testutil.NewFakeAppServer(t)
 	client, err := Dial(context.Background(), fake.URL(), fake.Token())

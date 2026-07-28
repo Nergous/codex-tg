@@ -29,6 +29,7 @@ type Coordinator struct {
 	codex                Codex
 	state                *state.Store
 	projects             map[string]models.Project
+	projectsMu           sync.RWMutex
 	mu                   sync.Mutex
 	turns                map[string]string
 	needsSubscription    map[string]bool
@@ -52,7 +53,7 @@ func New(c Codex, s *state.Store, projects []models.Project) *Coordinator {
 	}
 }
 func (c *Coordinator) OpenProject(ctx context.Context, path string, fresh bool) (models.Session, error) {
-	if _, ok := c.projects[path]; !ok {
+	if !c.projectAllowed(path) {
 		return models.Session{}, ErrProjectNotAllowed
 	}
 	if !fresh {
@@ -80,10 +81,27 @@ func (c *Coordinator) OpenProject(ctx context.Context, path string, fresh bool) 
 }
 
 func (c *Coordinator) PrepareProject(path string) error {
-	if _, ok := c.projects[path]; !ok {
+	if !c.projectAllowed(path) {
 		return ErrProjectNotAllowed
 	}
 	return nil
+}
+
+func (c *Coordinator) AddProject(ctx context.Context, project models.Project) error {
+	if err := c.state.PutProject(ctx, &project); err != nil {
+		return err
+	}
+	c.projectsMu.Lock()
+	c.projects[project.Path] = project
+	c.projectsMu.Unlock()
+	return nil
+}
+
+func (c *Coordinator) projectAllowed(path string) bool {
+	c.projectsMu.RLock()
+	defer c.projectsMu.RUnlock()
+	_, ok := c.projects[path]
+	return ok
 }
 
 func (c *Coordinator) AdoptThread(ctx context.Context, path, threadID string) error {
@@ -129,7 +147,8 @@ func (c *Coordinator) subscribeAfterMaterialization(ctx context.Context, threadI
 		if err == nil {
 			return nil
 		}
-		if !errors.Is(err, codex.ErrThreadRolloutNotFound) {
+		if !errors.Is(err, codex.ErrThreadRolloutNotFound) &&
+			!errors.Is(err, codex.ErrThreadRolloutNotReady) {
 			return fmt.Errorf("subscribe to interactive thread: %w", err)
 		}
 		if attempt+1 == c.subscriptionAttempts {
@@ -242,7 +261,7 @@ func (c *Coordinator) findSession(ctx context.Context, threadID string) (models.
 		return models.Session{}, err
 	}
 	for _, p := range projects {
-		if _, allowed := c.projects[p.Path]; !allowed {
+		if !c.projectAllowed(p.Path) {
 			continue
 		}
 		s, err := c.state.ActiveSession(ctx, p.Path)
