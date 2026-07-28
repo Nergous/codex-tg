@@ -33,12 +33,15 @@ func New(codexBinary, endpoint string) Launcher {
 }
 
 func (l Launcher) Args(cwd, threadID string) LaunchArgs {
-	return LaunchArgs{
+	args := LaunchArgs{
 		"--cd", cwd,
 		"--remote", l.Endpoint,
 		"--remote-auth-token-env", l.TokenEnv,
-		"resume", threadID,
 	}
+	if threadID != "" {
+		args = append(args, "resume", threadID)
+	}
+	return args
 }
 
 func (l Launcher) Run(ctx context.Context, cwd, threadID, token string) error {
@@ -57,10 +60,6 @@ func (l Launcher) Run(ctx context.Context, cwd, threadID, token string) error {
 	if strings.TrimSpace(token) == "" {
 		return fmt.Errorf("%w: token", ErrInvalidLauncherConfig)
 	}
-	if threadID == "" {
-		return fmt.Errorf("%w: thread id", ErrInvalidLauncherConfig)
-	}
-
 	args := []string(l.Args(cwd, threadID))
 
 	runner := l.runner
@@ -73,8 +72,15 @@ func (l Launcher) Run(ctx context.Context, cwd, threadID, token string) error {
 }
 
 func runCommand(ctx context.Context, binary string, args []string, env []string) error {
+	return newCommand(ctx, binary, args, env).Run()
+}
+
+func newCommand(ctx context.Context, binary string, args []string, env []string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.Env = env
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 	configureCommand(cmd)
-	return cmd.Run()
+	return cmd
 }

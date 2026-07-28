@@ -2,7 +2,9 @@ package ipc
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -43,6 +45,21 @@ func TestServerClientRoundTripOpenStatusStop(t *testing.T) {
 	}
 	if service.stopCalls != 1 {
 		t.Fatalf("Stop() service calls = %d, want 1", service.stopCalls)
+	}
+}
+
+func TestClientIncludesServerErrorMessage(t *testing.T) {
+	service := &fakeService{openErr: errors.New("project is not allow-listed")}
+	server := NewServer(service, "local-token")
+	addr, err := server.Start(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+
+	_, err = NewClient(addr, "local-token").Open(context.Background(), OpenRequest{ProjectPath: t.TempDir(), NewSession: true})
+	if err == nil || !strings.Contains(err.Error(), "project is not allow-listed") {
+		t.Fatalf("Open() error = %v", err)
 	}
 }
 

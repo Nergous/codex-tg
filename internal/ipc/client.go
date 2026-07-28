@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 )
@@ -88,6 +89,11 @@ func (c *Client) call(ctx context.Context, method, path string, in any, out any)
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		message, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+		detail := strings.TrimSpace(string(message))
+		if detail != "" {
+			return fmt.Errorf("request failed: %s: %s", resp.Status, detail)
+		}
 		return fmt.Errorf("request failed: %s", resp.Status)
 	}
 

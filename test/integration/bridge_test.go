@@ -33,7 +33,9 @@ func (m *recordingMessenger) Send(_ context.Context, _ int64, _ string, k *teleg
 func (*recordingMessenger) Edit(context.Context, int64, int64, string, *telegram.InlineKeyboard, telegram.MessageOptions) error {
 	return nil
 }
-func (*recordingMessenger) AnswerCallback(context.Context, string, string) error { return nil }
+func (*recordingMessenger) AnswerCallback(context.Context, string, string) error    { return nil }
+func (*recordingMessenger) SetReaction(context.Context, int64, int64, string) error { return nil }
+func (*recordingMessenger) SendChatAction(context.Context, int64, string) error     { return nil }
 
 type updates struct {
 	offset int64
@@ -68,7 +70,9 @@ func (messenger) Send(context.Context, int64, string, *telegram.InlineKeyboard, 
 func (messenger) Edit(context.Context, int64, int64, string, *telegram.InlineKeyboard, telegram.MessageOptions) error {
 	return nil
 }
-func (messenger) AnswerCallback(context.Context, string, string) error { return nil }
+func (messenger) AnswerCallback(context.Context, string, string) error    { return nil }
+func (messenger) SetReaction(context.Context, int64, int64, string) error { return nil }
+func (messenger) SendChatAction(context.Context, int64, string) error     { return nil }
 func TestBridgeRejectsUnauthorizedAndGroupUpdates(t *testing.T) {
 	c := &coordinator{}
 	h := telegram.NewHandler(telegram.HandlerOptions{Coordinator: c, Messenger: messenger{}, AllowedUserID: 100, AllowedChatID: 200})

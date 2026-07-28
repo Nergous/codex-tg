@@ -76,6 +76,16 @@ func TestRunHelp(t *testing.T) {
 	}
 }
 
+func TestWriteServeStatus(t *testing.T) {
+	var out bytes.Buffer
+	writeServeStatus(&out, "127.0.0.1:4500", "http://127.0.0.1:49152", `C:\runtime.json`, 2)
+	for _, want := range []string{"codex-tg is running", "127.0.0.1:4500", "http://127.0.0.1:49152", `C:\runtime.json`, "Projects: 2", "Ctrl+C"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output %q does not contain %q", out.String(), want)
+		}
+	}
+}
+
 type openSupervisor struct{}
 
 func (openSupervisor) Start(context.Context) (codex.AppServerEndpoint, error) {
@@ -84,16 +94,20 @@ func (openSupervisor) Start(context.Context) (codex.AppServerEndpoint, error) {
 
 func (openSupervisor) Stop() error { return nil }
 
-func TestRunOpenLaunchesServiceCreatedThread(t *testing.T) {
+func TestRunOpenLetsRemoteTUICreateThread(t *testing.T) {
 	ctx := context.Background()
 	projectPath := t.TempDir()
 	service := app.New(openSupervisor{})
-	service.Configure(func(_ context.Context, path string, fresh bool) (string, error) {
-		if path != projectPath || fresh {
-			t.Fatalf("open path=%q fresh=%t", path, fresh)
-		}
-		return "thr-service-created", nil
+	service.Configure(func(context.Context, string, bool) (string, error) {
+		t.Fatal("interactive open must not create thread in service")
+		return "", nil
 	}, nil, nil)
+	service.ConfigureInteractive(func(_ context.Context, path string) error {
+		if path != projectPath {
+			t.Fatalf("prepare path=%q", path)
+		}
+		return nil
+	}, nil)
 	if err := service.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +134,7 @@ func TestRunOpenLaunchesServiceCreatedThread(t *testing.T) {
 	if err := runOpen([]string{projectPath}); err != nil {
 		t.Fatal(err)
 	}
-	if launched.binary != "codex.exe" || launched.endpoint != "ws://127.0.0.1:4500" || launched.cwd != projectPath || launched.threadID != "thr-service-created" || launched.token != "runtime-token" {
+	if launched.binary != "codex.exe" || launched.endpoint != "ws://127.0.0.1:4500" || launched.cwd != projectPath || launched.threadID != "" || launched.token != "runtime-token" {
 		t.Fatalf("launch=%+v", launched)
 	}
 }

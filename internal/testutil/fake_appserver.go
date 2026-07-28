@@ -109,14 +109,14 @@ func (f *FakeAppServer) Disconnect() {
 }
 
 func (f *FakeAppServer) sendFrame(ctx context.Context, frame scriptFrame) error {
-	conn, err := f.awaitConnection()
+	conn, err := f.awaitConnection(ctx)
 	if err != nil {
 		return err
 	}
 	return wsjson.Write(ctx, conn, frame)
 }
 
-func (f *FakeAppServer) awaitConnection() (*websocket.Conn, error) {
+func (f *FakeAppServer) awaitConnection(ctx context.Context) (*websocket.Conn, error) {
 	f.mu.Lock()
 	if f.conn != nil {
 		conn := f.conn
@@ -136,8 +136,8 @@ func (f *FakeAppServer) awaitConnection() (*websocket.Conn, error) {
 			return nil, err
 		}
 		return conn, nil
-	default:
-		return nil, fmt.Errorf("no websocket connection yet")
+	case <-ctx.Done():
+		return nil, fmt.Errorf("wait for websocket connection: %w", ctx.Err())
 	}
 }
 

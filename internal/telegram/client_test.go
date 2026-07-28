@@ -194,3 +194,22 @@ func TestClient_GetMe(t *testing.T) {
 		t.Fatalf("getMe calls = %d, want 1", fake.Calls("getMe"))
 	}
 }
+
+func TestClient_ReactionAndTyping(t *testing.T) {
+	t.Parallel()
+
+	fake := testutil.NewFakeTelegram(t)
+	fake.EnqueueResponse("setMessageReaction", http.StatusOK, `{"ok":true,"result":true}`)
+	fake.EnqueueResponse("sendChatAction", http.StatusOK, `{"ok":true,"result":true}`)
+	client := NewClient(fake.URL(), fake.Token(), fake.HTTPClient())
+
+	if err := client.SetReaction(context.Background(), 100, 42, "👀"); err != nil {
+		t.Fatalf("SetReaction() error = %v", err)
+	}
+	if err := client.SendChatAction(context.Background(), 100, "typing"); err != nil {
+		t.Fatalf("SendChatAction() error = %v", err)
+	}
+	if fake.Calls("setMessageReaction") != 1 || fake.Calls("sendChatAction") != 1 {
+		t.Fatalf("reaction calls=%d action calls=%d", fake.Calls("setMessageReaction"), fake.Calls("sendChatAction"))
+	}
+}

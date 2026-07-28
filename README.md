@@ -5,7 +5,7 @@ an authorized Telegram private chat. Its goal is to let one operator continue
 the same Codex thread from either interface without exposing Codex App Server
 to the network.
 
-Version `v0.1.3` provides the complete single-operator bridge lifecycle:
+Version `v0.1.4` provides the complete single-operator bridge lifecycle:
 setup, supervised App Server startup, Telegram polling, shared threads, queued
 prompts, approvals, recovery, local TUI attachment, and per-user autostart. It
 is considered beta while the upstream Codex App Server protocol remains
@@ -103,33 +103,87 @@ Non-secret configuration uses JSON similar to:
 
 The Telegram bot token must not be placed in this file.
 
-## CLI
+## Usage
 
-```text
+### 1. Initial setup
+
+Run the interactive setup once:
+
+```console
 codex-tg setup
-codex-tg serve
-codex-tg open [--new] <path>
-codex-tg project add|list|remove
-codex-tg status
-codex-tg autostart install|remove|status
 ```
 
-Run `codex-tg setup` locally first. It validates the Telegram bot, stores its
-token in the system credential store, and writes non-secret config under
+It validates the Telegram bot, stores its token in the system credential store,
+and writes non-secret configuration to
 `%LOCALAPPDATA%\codex-tg\config.json` on Windows or
 `$XDG_CONFIG_HOME/codex-tg/config.json` on Linux (normally
 `~/.config/codex-tg/config.json`).
 
-Start the bridge with `codex-tg serve`, then use `codex-tg open [--new] <path>`
-to attach the TUI to the exact service-owned thread. Use `project list`,
-`project add <name> <path>`, and `project remove <name>` to maintain the
-allow-list. `autostart install` creates a per-user Windows logon task or Linux
-systemd user service.
+### 2. Start the bridge
 
-Telegram commands: `/status`, `/projects`, `/project`, `/new`, `/resume`,
-`/sessions`, `/diff`, `/cancel`, `/queue`, `/lock`, and `/unlock`.
-`/sessions` lists recent persisted threads for the selected project. `/queue`
-lists prompts waiting behind the active turn without consuming them.
+```console
+codex-tg serve
+```
+
+Keep this process running. It starts Codex App Server, Telegram polling, and the
+local IPC endpoint used by other `codex-tg` commands.
+
+### 3. Manage projects
+
+Only configured projects can be opened from the CLI or selected in Telegram:
+
+```console
+codex-tg project list
+codex-tg project add codex-tg D:/Files/go/codex-tg
+codex-tg project remove codex-tg
+```
+
+On Linux:
+
+```console
+codex-tg project add codex-tg /home/user/projects/codex-tg
+```
+
+When running from Git Bash, write Windows paths with forward slashes
+(`D:/Files/go/codex-tg`), use the MSYS form (`/d/Files/go/codex-tg`), or quote
+paths containing backslashes (`"D:\Files\go\codex-tg"`). Unquoted backslashes
+are consumed by the shell before `codex-tg` receives the path.
+
+### 4. Open Codex
+
+Run this in another terminal while `codex-tg serve` is active:
+
+```console
+codex-tg open D:/Files/go/codex-tg
+codex-tg open --new D:/Files/go/codex-tg
+```
+
+Both commands launch an interactive Codex TUI connected to the bridge. The TUI
+creates its thread, then the service adopts it for the selected project so the
+same conversation can continue through Telegram. `--new` remains available for
+CLI compatibility and explicitly requests a fresh interactive session.
+
+### 5. Telegram commands
+
+- `/status` — show bridge and session state.
+- `/projects` and `/project` — list or select an allowed project.
+- `/new` and `/resume` — create or resume a thread.
+- `/sessions` — list recent persisted threads for the selected project.
+- `/diff` — show current changes.
+- `/cancel` — interrupt the active turn.
+- `/queue` — list prompts waiting behind the active turn.
+- `/lock` and `/unlock` — control the Telegram-side session lock.
+
+### 6. Status and autostart
+
+```console
+codex-tg status
+codex-tg autostart install
+codex-tg autostart status
+codex-tg autostart remove
+```
+
+Autostart uses a per-user Windows logon task or Linux systemd user service.
 
 To uninstall, run `codex-tg autostart remove`, stop the service, then remove
 the platform config directory and the `codex-tg/telegram-bot-token` credential.

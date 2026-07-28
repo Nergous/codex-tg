@@ -7,6 +7,41 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-07-28
+
+### Added
+
+- Show Telegram typing activity while Codex works and react to submitted
+  prompts with processing, success, or failure status.
+
+### Fixed
+
+- Accept the current Codex App Server `thread/list` response shape while
+  retaining compatibility with the legacy response.
+- Queue burst App Server events without disconnecting the bridge while
+  Telegram rendering catches up.
+- Raise the App Server WebSocket message limit from the library default of
+  32 KiB to 10 MiB for thread and turn payloads.
+- Attach the Codex TUI to the current terminal instead of launching it with
+  disconnected standard streams.
+- Adopt threads created by the remote Codex TUI, persist their selected
+  projects, and subscribe the Telegram bridge after the first turn creates the
+  rollout.
+- Replace stale persisted threads whose rollout no longer exists instead of
+  failing `open` or service startup.
+- Parse current nested Codex thread, turn, item, and delta events so Telegram
+  receives TUI-originated responses.
+- Avoid duplicating streamed assistant messages when Codex later emits the
+  completed item.
+- Report App Server WebSocket disconnects to the service instead of leaving a
+  session indefinitely marked as running.
+- Show App Server, IPC, project, and runtime details when `serve` starts, and
+  include captured App Server diagnostics when the bridge exits unexpectedly.
+
+### Documentation
+
+- Document safe Windows path forms for Git Bash commands.
+
 ## [0.1.3] - 2026-07-28
 
 ### Fixed

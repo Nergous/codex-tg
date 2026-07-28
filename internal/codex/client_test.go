@@ -12,6 +12,91 @@ import (
 	"github.com/Nergous/codex-tg/internal/testutil"
 )
 
+func TestIsThreadRolloutNotFound(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "missing rollout",
+			err:  &RPCError{Code: -32603, Message: "no rollout found for thread id 019fa876"},
+			want: true,
+		},
+		{
+			name: "other server error",
+			err:  &RPCError{Code: -32603, Message: "database unavailable"},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isThreadRolloutNotFound(tt.err); got != tt.want {
+				t.Fatalf("isThreadRolloutNotFound() = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestClientParsesNestedThreadStartedEvent(t *testing.T) {
+	fake := testutil.NewFakeAppServer(t)
+	client, err := Dial(context.Background(), fake.URL(), fake.Token())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	if err := fake.SendNotification(context.Background(), "thread/started", map[string]any{
+		"thread": map[string]any{"id": "thr-tui"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case event := <-client.Events():
+		if event.Method != "thread/started" || event.ThreadID != "thr-tui" {
+			t.Fatalf("event=%+v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for thread/started")
+	}
+}
+
+func TestClientNormalizesV2TurnAndAgentDeltaEvents(t *testing.T) {
+	fake := testutil.NewFakeAppServer(t)
+	client, err := Dial(context.Background(), fake.URL(), fake.Token())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	if err := fake.SendNotification(context.Background(), "item/agentMessage/delta", map[string]any{
+		"threadId": "thr-1",
+		"turnId":   "turn-1",
+		"itemId":   "item-1",
+		"delta":    "answer",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	delta := <-client.Events()
+	if delta.ThreadID != "thr-1" || delta.TurnID != "turn-1" || delta.ItemID != "item-1" || delta.Text != "answer" {
+		t.Fatalf("delta=%+v", delta)
+	}
+
+	if err := fake.SendNotification(context.Background(), "turn/completed", map[string]any{
+		"threadId": "thr-1",
+		"turn": map[string]any{
+			"id":     "turn-1",
+			"status": "completed",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	completed := <-client.Events()
+	if completed.ThreadID != "thr-1" || completed.TurnID != "turn-1" {
+		t.Fatalf("completed=%+v", completed)
+	}
+}
+
 func TestClientInitializesStartsThreadAndStreamsCompletion(t *testing.T) {
 	fake := testutil.NewFakeAppServer(t)
 
@@ -531,7 +616,7 @@ func TestClientDoesNotAutoRespondToApprovalRequests(t *testing.T) {
 	}
 }
 
-func TestClientFailsOnEventBackpressure(t *testing.T) {
+func TestClientQueuesBurstEventsWithoutDisconnecting(t *testing.T) {
 	fake := testutil.NewFakeAppServer(t)
 	client, err := Dial(context.Background(), fake.URL(), fake.Token())
 	if err != nil {
@@ -549,7 +634,7 @@ func TestClientFailsOnEventBackpressure(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	turnSeen := make(chan struct{}, 1)
+	turnSeen := make(chan incomingFrame, 1)
 	go func() {
 		seen := map[string]struct{}{}
 		for {
@@ -559,9 +644,8 @@ func TestClientFailsOnEventBackpressure(t *testing.T) {
 			if !ok {
 				continue
 			}
-			_ = frame
 			select {
-			case turnSeen <- struct{}{}:
+			case turnSeen <- frame:
 			default:
 			}
 			return
@@ -574,7 +658,7 @@ func TestClientFailsOnEventBackpressure(t *testing.T) {
 		errCh <- err
 	}()
 
-	<-turnSeen
+	turnFrame := <-turnSeen
 	for i := 0; i < 20; i++ {
 		_ = fake.SendNotification(context.Background(), "turn/notification", map[string]any{
 			"threadId": "thread-backpressure",
@@ -583,12 +667,24 @@ func TestClientFailsOnEventBackpressure(t *testing.T) {
 		})
 	}
 
-	callErr := <-errCh
-	if callErr == nil {
-		t.Fatal("turn/start should fail due event channel backpressure")
+	if err := fake.SendOutOfOrderResponse(context.Background(), turnFrame.id, map[string]any{
+		"turn": map[string]any{"id": "turn-started"},
+	}); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(callErr.Error(), ErrEventBackpressure.Error()) {
-		t.Fatalf("turn/start error = %v, want contains %q", callErr, ErrEventBackpressure.Error())
+
+	if callErr := <-errCh; callErr != nil {
+		t.Fatalf("turn/start error = %v, want nil", callErr)
+	}
+	for i := 0; i < 20; i++ {
+		select {
+		case event := <-client.Events():
+			if event.TurnID != fmt.Sprintf("turn-%d", i) {
+				t.Fatalf("event %d turn = %q", i, event.TurnID)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for event %d", i)
+		}
 	}
 }
 
@@ -605,6 +701,82 @@ func TestClientErrorsDoNotLeakAuthorizationToken(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), secretToken) {
 		t.Fatalf("error leaks token: %q", err)
+	}
+}
+
+func TestClientAcceptsLargeAppServerMessages(t *testing.T) {
+	fake := testutil.NewFakeAppServer(t)
+	client, err := Dial(context.Background(), fake.URL(), fake.Token())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	want := strings.Repeat("x", 64*1024)
+	if err := fake.SendNotification(context.Background(), "item/agentMessage/delta", map[string]any{
+		"threadId": "thr-large",
+		"turnId":   "turn-large",
+		"text":     want,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case event := <-client.Events():
+		if event.Text != want {
+			t.Fatalf("event text length = %d, want %d", len(event.Text), len(want))
+		}
+	case err := <-client.Errors():
+		t.Fatalf("client disconnected: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for large event")
+	}
+}
+
+func TestStartThreadExplicitlyPersistsSession(t *testing.T) {
+	fake := testutil.NewFakeAppServer(t)
+	client, err := Dial(context.Background(), fake.URL(), fake.Token())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	respondToInitialize(t, fake, context.Background())
+	if err := client.Initialize(context.Background(), ClientInfo{Name: "test", Title: "test", Version: "test"}); err != nil {
+		t.Fatal(err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		frame, ok := nextIncomingFrame(t, fake, time.Second, map[string]struct{}{}, func(f incomingFrame) bool { return f.method == "thread/start" })
+		if !ok {
+			errCh <- errors.New("thread/start not received")
+			return
+		}
+		var payload struct {
+			Params map[string]any `json:"params"`
+		}
+		if err := json.Unmarshal(frame.raw, &payload); err != nil {
+			errCh <- err
+			return
+		}
+		value, exists := payload.Params["ephemeral"]
+		responseErr := fake.SendOutOfOrderResponse(context.Background(), frame.id, map[string]any{"thread": map[string]any{"id": "thr-persisted"}})
+		if responseErr != nil {
+			errCh <- responseErr
+			return
+		}
+		if !exists || value != false {
+			errCh <- fmt.Errorf("ephemeral = %v, exists=%t", value, exists)
+			return
+		}
+		errCh <- nil
+	}()
+
+	if _, err := client.StartThread(context.Background(), t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-errCh; err != nil {
+		t.Fatal(err)
 	}
 }
 

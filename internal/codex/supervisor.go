@@ -260,7 +260,9 @@ func (s *Supervisor) ProbeCompatibility(ctx context.Context, wsURL, capabilityTo
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return s.wrapCompatibilityError(err, version)
 	}
-	if _, ok := payload["threads"]; !ok {
+	_, hasData := payload["data"]
+	_, hasThreads := payload["threads"]
+	if !hasData && !hasThreads {
 		return s.wrapCompatibilityError(errors.New("missing required thread.list result fields"), version)
 	}
 	return nil

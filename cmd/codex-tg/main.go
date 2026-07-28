@@ -206,6 +206,7 @@ func runServe([]string) error {
 	var coordinator *session.Coordinator
 	var handler *telegram.Handler
 	var codexEvents <-chan codex.Event
+	var codexErrors <-chan error
 	service.Configure(func(ctx context.Context, path string, fresh bool) (string, error) {
 		if coordinator == nil {
 			return "", errors.New("service initializing")
@@ -224,6 +225,24 @@ func runServe([]string) error {
 		bot := telegram.NewClient("https://api.telegram.org/bot"+string(token), string(token), nil)
 		handler = telegram.NewHandler(telegram.HandlerOptions{Coordinator: coordinator, Messenger: bot, AllowedUserID: cfg.Telegram.AllowedUserID, AllowedChatID: cfg.Telegram.AllowedChatID, ApprovalService: approval.New(store), ApprovalResponder: client, LockStore: store})
 		codexEvents = client.Events()
+		codexErrors = client.Errors()
+		return nil
+	})
+	service.ConfigureInteractive(func(_ context.Context, path string) error {
+		if coordinator == nil {
+			return errors.New("service initializing")
+		}
+		return coordinator.PrepareProject(path)
+	}, func(ctx context.Context, path, threadID string) error {
+		if coordinator == nil {
+			return errors.New("service initializing")
+		}
+		if err := coordinator.AdoptThread(ctx, path, threadID); err != nil {
+			return err
+		}
+		if handler != nil {
+			handler.AdoptThread(cfg.Telegram.AllowedChatID, path, threadID)
+		}
 		return nil
 	})
 	if err := service.Start(ctx); err != nil {
@@ -243,8 +262,30 @@ func runServe([]string) error {
 		return err
 	}
 	defer app.RemoveRuntime(runtimePath)
+	writeServeStatus(os.Stdout, cfg.AppServer.Listen, ipcAddress, runtimePath, len(cfg.Projects))
 	bot := telegram.NewClient("https://api.telegram.org/bot"+string(token), string(token), nil)
-	return service.RunBridge(ctx, pollingStore{client: bot, store: store}, handler.Handle, codexEvents, handler.OnEvent, coordinator.Complete)
+	handleCodexEvent := func(ctx context.Context, event codex.Event) error {
+		if event.Method == "thread/started" {
+			if err := service.AdoptInteractiveThread(ctx, event.ThreadID); err != nil {
+				return err
+			}
+		}
+		return handler.OnEvent(ctx, event)
+	}
+	err = service.RunBridge(ctx, pollingStore{client: bot, store: store}, handler.Handle, codexEvents, codexErrors, handleCodexEvent, coordinator.Complete)
+	if logs := strings.TrimSpace(supervisor.Logs()); err != nil && logs != "" {
+		return fmt.Errorf("%w\nApp Server log:\n%s", err, logs)
+	}
+	return err
+}
+
+func writeServeStatus(w io.Writer, appServer, ipcAddress, runtimePath string, projects int) {
+	fmt.Fprintln(w, "codex-tg is running")
+	fmt.Fprintf(w, "  App Server: %s\n", appServer)
+	fmt.Fprintf(w, "  IPC: %s\n", ipcAddress)
+	fmt.Fprintf(w, "  Projects: %d\n", projects)
+	fmt.Fprintf(w, "  Runtime: %s\n", runtimePath)
+	fmt.Fprintln(w, "Press Ctrl+C to stop.")
 }
 func randomControlToken() (string, error) {
 	raw := make([]byte, 32)
@@ -317,6 +358,7 @@ func runOpen(args []string) error {
 	response, err := client.Open(context.Background(), ipc.OpenRequest{
 		ProjectPath: projectPath,
 		NewSession:  newSession,
+		Interactive: true,
 	})
 	if err != nil {
 		return err

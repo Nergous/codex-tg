@@ -155,6 +155,30 @@ func (c *Client) DeleteWebhook(ctx context.Context) error {
 	return c.call(ctx, "deleteWebhook", map[string]bool{}, nil)
 }
 
+func (c *Client) SetReaction(ctx context.Context, chatID, messageID int64, emoji string) error {
+	request := struct {
+		ChatID    int64 `json:"chat_id"`
+		MessageID int64 `json:"message_id"`
+		Reaction  []struct {
+			Type  string `json:"type"`
+			Emoji string `json:"emoji"`
+		} `json:"reaction"`
+	}{ChatID: chatID, MessageID: messageID}
+	request.Reaction = append(request.Reaction, struct {
+		Type  string `json:"type"`
+		Emoji string `json:"emoji"`
+	}{Type: "emoji", Emoji: emoji})
+	return c.call(ctx, "setMessageReaction", request, nil)
+}
+
+func (c *Client) SendChatAction(ctx context.Context, chatID int64, action string) error {
+	request := struct {
+		ChatID int64  `json:"chat_id"`
+		Action string `json:"action"`
+	}{ChatID: chatID, Action: action}
+	return c.call(ctx, "sendChatAction", request, nil)
+}
+
 func (c *Client) GetMe(ctx context.Context) (User, error) {
 	var out User
 	if err := c.call(ctx, "getMe", map[string]bool{}, &out); err != nil {

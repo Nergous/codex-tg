@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"testing"
 
@@ -21,6 +22,7 @@ func TestPumpCodexEventsRendersAndCompletesTerminalTurn(t *testing.T) {
 	err := PumpCodexEvents(
 		context.Background(),
 		events,
+		nil,
 		func(_ context.Context, event codex.Event) error {
 			rendered = append(rendered, event.Method)
 			return nil
@@ -30,8 +32,8 @@ func TestPumpCodexEventsRendersAndCompletesTerminalTurn(t *testing.T) {
 			return nil
 		},
 	)
-	if err != nil {
-		t.Fatal(err)
+	if !errors.Is(err, codex.ErrDisconnected) {
+		t.Fatalf("error = %v, want %v", err, codex.ErrDisconnected)
 	}
 	if want := []string{"item/agentMessage/delta", "turn/completed"}; !reflect.DeepEqual(rendered, want) {
 		t.Fatalf("rendered=%v want=%v", rendered, want)
@@ -98,11 +100,12 @@ func TestRunBridgeConsumesTelegramAndCodexEvents(t *testing.T) {
 		updates,
 		func(context.Context, telegram.Update) error { telegramCalls++; return nil },
 		events,
+		nil,
 		func(context.Context, codex.Event) error { codexCalls++; return nil },
 		func(context.Context, string, string) error { completeCalls++; return nil },
 	)
-	if err != nil {
-		t.Fatal(err)
+	if !errors.Is(err, codex.ErrDisconnected) {
+		t.Fatalf("error = %v, want %v", err, codex.ErrDisconnected)
 	}
 	if telegramCalls != 1 || updates.saved != 8 || codexCalls != 1 || completeCalls != 1 {
 		t.Fatalf("telegram=%d offset=%d codex=%d complete=%d", telegramCalls, updates.saved, codexCalls, completeCalls)
@@ -199,6 +202,63 @@ func TestServiceOpenReturnsRuntimeEndpoint(t *testing.T) {
 	}
 	if got.ThreadID != "thr-1" || got.Endpoint != "ws://127.0.0.1:4500" || got.Token != "runtime" {
 		t.Fatalf("open=%+v", got)
+	}
+}
+
+func TestServiceInteractiveOpenDefersThreadCreationToTUI(t *testing.T) {
+	service := New(&fakeSupervisor{})
+	openCalled := false
+	service.open = func(context.Context, string, bool) (string, error) {
+		openCalled = true
+		return "thr-unexpected", nil
+	}
+	preparedPath := ""
+	service.prepareInteractive = func(_ context.Context, path string) error {
+		preparedPath = path
+		return nil
+	}
+	if err := service.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := service.Open(context.Background(), ipc.OpenRequest{
+		ProjectPath: "D:\\repo",
+		Interactive: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if openCalled || preparedPath != "D:\\repo" || got.ThreadID != "" {
+		t.Fatalf("openCalled=%t prepared=%q response=%+v", openCalled, preparedPath, got)
+	}
+}
+
+func TestServiceAdoptsThreadStartedByInteractiveTUI(t *testing.T) {
+	service := New(&fakeSupervisor{})
+	var adoptedPath, adoptedThread string
+	service.prepareInteractive = func(context.Context, string) error { return nil }
+	service.adoptInteractive = func(_ context.Context, path, threadID string) error {
+		adoptedPath, adoptedThread = path, threadID
+		return nil
+	}
+	if err := service.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Open(context.Background(), ipc.OpenRequest{
+		ProjectPath: "D:\\repo",
+		Interactive: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.AdoptInteractiveThread(context.Background(), "thr-tui"); err != nil {
+		t.Fatal(err)
+	}
+	if adoptedPath != "D:\\repo" || adoptedThread != "thr-tui" {
+		t.Fatalf("adopted path=%q thread=%q", adoptedPath, adoptedThread)
+	}
+	status, err := service.Status(context.Background())
+	if err != nil || status.ThreadID != "thr-tui" {
+		t.Fatalf("status=%+v error=%v", status, err)
 	}
 }
 

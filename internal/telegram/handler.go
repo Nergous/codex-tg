@@ -38,6 +38,8 @@ type Messenger interface {
 	Send(ctx context.Context, chatID int64, text string, keyboard *InlineKeyboard, opts MessageOptions) (int64, error)
 	Edit(ctx context.Context, chatID, messageID int64, text string, keyboard *InlineKeyboard, opts MessageOptions) error
 	AnswerCallback(ctx context.Context, callbackID, text string) error
+	SetReaction(ctx context.Context, chatID, messageID int64, emoji string) error
+	SendChatAction(ctx context.Context, chatID int64, action string) error
 }
 
 type ApprovalService interface {
@@ -202,10 +204,10 @@ func (h *Handler) handleMessage(ctx context.Context, chatID int64, message *Mess
 		}
 		return h.processCommand(ctx, chatID, command, args)
 	}
-	return h.handlePrompt(ctx, chatID, text)
+	return h.handlePrompt(ctx, chatID, message.MessageID, text)
 }
 
-func (h *Handler) handlePrompt(ctx context.Context, chatID int64, text string) error {
+func (h *Handler) handlePrompt(ctx context.Context, chatID, messageID int64, text string) error {
 	threadID, err := h.ensureThread(ctx, chatID)
 	if err != nil {
 		if errors.Is(err, errNoProject) {
@@ -214,7 +216,14 @@ func (h *Handler) handlePrompt(ctx context.Context, chatID int64, text string) e
 		return err
 	}
 	h.bindRenderer(chatID, threadID)
-	return h.coordinator.Submit(ctx, threadID, text)
+	_ = h.messenger.SetReaction(ctx, chatID, messageID, "👀")
+	h.renderer.AddInputMessage(threadID, messageID)
+	if err := h.coordinator.Submit(ctx, threadID, text); err != nil {
+		h.renderer.RemoveInputMessage(threadID, messageID)
+		_ = h.messenger.SetReaction(ctx, chatID, messageID, "❌")
+		return err
+	}
+	return nil
 }
 
 func (h *Handler) processCommand(ctx context.Context, chatID int64, command string, args []string) error {
@@ -639,6 +648,17 @@ func (h *Handler) OnEvent(ctx context.Context, event codex.Event) error {
 		return h.handleApprovalEvent(ctx, event)
 	}
 	return h.renderer.OnEvent(ctx, event)
+}
+
+func (h *Handler) AdoptThread(chatID int64, projectPath, threadID string) {
+	if chatID == 0 || projectPath == "" || threadID == "" {
+		return
+	}
+	h.withState(chatID, func(state *chatState) {
+		state.project = projectPath
+		state.thread = threadID
+	})
+	h.bindRenderer(chatID, threadID)
 }
 
 func (h *Handler) isApprovalMethod(method string) bool {

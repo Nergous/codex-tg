@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/Nergous/codex-tg/internal/codex"
 	"github.com/Nergous/codex-tg/internal/models"
@@ -25,11 +26,14 @@ type commandExecutor interface {
 }
 
 type Coordinator struct {
-	codex    Codex
-	state    *state.Store
-	projects map[string]models.Project
-	mu       sync.Mutex
-	turns    map[string]string
+	codex                Codex
+	state                *state.Store
+	projects             map[string]models.Project
+	mu                   sync.Mutex
+	turns                map[string]string
+	needsSubscription    map[string]bool
+	subscriptionDelay    time.Duration
+	subscriptionAttempts int
 }
 
 func New(c Codex, s *state.Store, projects []models.Project) *Coordinator {
@@ -37,7 +41,15 @@ func New(c Codex, s *state.Store, projects []models.Project) *Coordinator {
 	for _, v := range projects {
 		p[v.Path] = v
 	}
-	return &Coordinator{codex: c, state: s, projects: p, turns: map[string]string{}}
+	return &Coordinator{
+		codex:                c,
+		state:                s,
+		projects:             p,
+		turns:                map[string]string{},
+		needsSubscription:    map[string]bool{},
+		subscriptionDelay:    50 * time.Millisecond,
+		subscriptionAttempts: 40,
+	}
 }
 func (c *Coordinator) OpenProject(ctx context.Context, path string, fresh bool) (models.Session, error) {
 	if _, ok := c.projects[path]; !ok {
@@ -46,9 +58,12 @@ func (c *Coordinator) OpenProject(ctx context.Context, path string, fresh bool) 
 	if !fresh {
 		if s, err := c.state.ActiveSession(ctx, path); err == nil {
 			if err = c.codex.ResumeThread(ctx, s.ThreadID); err != nil {
-				return models.Session{}, err
+				if !errors.Is(err, codex.ErrThreadRolloutNotFound) {
+					return models.Session{}, err
+				}
+			} else {
+				return s, nil
 			}
-			return s, nil
 		} else if !errors.Is(err, state.ErrNotFound) {
 			return models.Session{}, err
 		}
@@ -63,6 +78,30 @@ func (c *Coordinator) OpenProject(ctx context.Context, path string, fresh bool) 
 	}
 	return s, nil
 }
+
+func (c *Coordinator) PrepareProject(path string) error {
+	if _, ok := c.projects[path]; !ok {
+		return ErrProjectNotAllowed
+	}
+	return nil
+}
+
+func (c *Coordinator) AdoptThread(ctx context.Context, path, threadID string) error {
+	if err := c.PrepareProject(path); err != nil {
+		return err
+	}
+	if err := c.state.SetActiveSession(ctx, &models.Session{
+		ProjectPath: path,
+		ThreadID:    threadID,
+		Active:      true,
+	}); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	c.needsSubscription[threadID] = true
+	c.mu.Unlock()
+	return nil
+}
 func (c *Coordinator) Submit(ctx context.Context, thread, prompt string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -73,8 +112,38 @@ func (c *Coordinator) Submit(ctx context.Context, thread, prompt string) error {
 	if err == nil {
 		c.turns[thread] = id
 		err = c.state.SetRunningTurn(ctx, thread, id)
+		if err == nil && c.needsSubscription[thread] {
+			err = c.subscribeAfterMaterialization(ctx, thread)
+			if err == nil {
+				delete(c.needsSubscription, thread)
+			}
+		}
 	}
 	return err
+}
+
+func (c *Coordinator) subscribeAfterMaterialization(ctx context.Context, threadID string) error {
+	var err error
+	for attempt := 0; attempt < c.subscriptionAttempts; attempt++ {
+		err = c.codex.ResumeThread(ctx, threadID)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, codex.ErrThreadRolloutNotFound) {
+			return fmt.Errorf("subscribe to interactive thread: %w", err)
+		}
+		if attempt+1 == c.subscriptionAttempts {
+			break
+		}
+		timer := time.NewTimer(c.subscriptionDelay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return fmt.Errorf("subscribe to interactive thread: %w", err)
 }
 func (c *Coordinator) Complete(ctx context.Context, thread, turn string) error {
 	c.mu.Lock()

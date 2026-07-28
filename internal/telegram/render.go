@@ -16,6 +16,7 @@ const (
 	defaultProgressThrottle  = 2 * time.Second
 	defaultHeartbeatInterval = 60 * time.Second
 	defaultHeartbeatCheck    = time.Second
+	defaultTypingInterval    = 4 * time.Second
 	defaultMaxStoredBytes    = 128 * 1024
 	defaultHeadBytes         = 8 * 1024
 	defaultTailBytes         = 112 * 1024
@@ -41,10 +42,12 @@ type RenderState struct {
 	TurnID          string
 	Project         string
 	StatusMessageID int64
+	InputMessageID  int64
 	StartedAt       time.Time
 	LastEventAt     time.Time
 	LastEditAt      time.Time
 	LastHeartbeatAt time.Time
+	LastTypingAt    time.Time
 
 	Activity     string
 	ChangedFiles int
@@ -54,6 +57,8 @@ type RenderState struct {
 
 type renderState struct {
 	RenderState
+	streamedItems   map[string]bool
+	lastAgentItemID string
 }
 
 type Renderer struct {
@@ -73,6 +78,7 @@ type Renderer struct {
 	threads      map[string]string       // threadID -> project path
 	chatByThread map[string]int64        // threadID -> chatID
 	statesByTurn map[string]*renderState // turnID -> render state
+	pendingInput map[string][]int64      // threadID -> Telegram message IDs
 }
 
 func NewRenderer(opts RendererOptions) *Renderer {
@@ -99,6 +105,25 @@ func NewRenderer(opts RendererOptions) *Renderer {
 		threads:          make(map[string]string),
 		chatByThread:     make(map[string]int64),
 		statesByTurn:     make(map[string]*renderState),
+		pendingInput:     make(map[string][]int64),
+	}
+}
+
+func (r *Renderer) AddInputMessage(threadID string, messageID int64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.pendingInput[threadID] = append(r.pendingInput[threadID], messageID)
+}
+
+func (r *Renderer) RemoveInputMessage(threadID string, messageID int64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	pending := r.pendingInput[threadID]
+	for i, id := range pending {
+		if id == messageID {
+			r.pendingInput[threadID] = append(pending[:i], pending[i+1:]...)
+			break
+		}
 	}
 }
 
@@ -140,6 +165,7 @@ func (r *Renderer) OnEvent(ctx context.Context, event codex.Event) error {
 	if state == nil {
 		return nil
 	}
+	r.sendTyping(state, now)
 
 	var changed int
 	text := event.Text
@@ -167,8 +193,26 @@ func (r *Renderer) OnEvent(ctx context.Context, event codex.Event) error {
 
 	visible := isVisibleRenderEvent(event.Method)
 	switch event.Method {
-	case "item/agentMessage/delta", "item/completed":
+	case "item/agentMessage/delta":
+		if event.ItemID != "" {
+			if state.lastAgentItemID != "" && state.lastAgentItemID != event.ItemID && len(state.AssistantRaw) > 0 {
+				state.AssistantRaw = append(state.AssistantRaw, '\n', '\n')
+			}
+			state.lastAgentItemID = event.ItemID
+			state.streamedItems[event.ItemID] = true
+		}
 		state.AssistantRaw = appendAssistantText(state.AssistantRaw, text)
+	case "item/completed":
+		if text != "" && (event.ItemID == "" || !state.streamedItems[event.ItemID]) {
+			current := string(state.AssistantRaw)
+			switch {
+			case text == current:
+			case strings.HasPrefix(text, current):
+				state.AssistantRaw = appendAssistantText(state.AssistantRaw, strings.TrimPrefix(text, current))
+			default:
+				state.AssistantRaw = appendAssistantText(state.AssistantRaw, text)
+			}
+		}
 	case "turn/completed", "turn/failed", "turn/interrupted", "turn/faulted":
 		if text != "" {
 			state.AssistantRaw = appendAssistantText(state.AssistantRaw, text)
@@ -204,6 +248,11 @@ func (r *Renderer) ensureTurnState(threadID, turnID string, now time.Time) *rend
 				Project:   r.threads[threadID],
 				StartedAt: now,
 			},
+			streamedItems: make(map[string]bool),
+		}
+		if pending := r.pendingInput[threadID]; len(pending) > 0 {
+			state.InputMessageID = pending[0]
+			r.pendingInput[threadID] = pending[1:]
 		}
 		r.statesByTurn[turnID] = state
 		return state
@@ -247,11 +296,32 @@ func (r *Renderer) finalize(ctx context.Context, state *renderState, method stri
 	if err := sendWithMarkdownFallback(ctx, r.messenger, state.ChatID, response, nil, MessageOptions{}, defaultFinalChunkBytes); err != nil {
 		return err
 	}
+	if state.InputMessageID != 0 {
+		reaction := "❌"
+		if method == "turn/completed" {
+			reaction = "✅"
+		}
+		_ = r.messenger.SetReaction(ctx, state.ChatID, state.InputMessageID, reaction)
+	}
 
 	r.mu.Lock()
 	delete(r.statesByTurn, state.TurnID)
 	r.mu.Unlock()
 	return nil
+}
+
+func (r *Renderer) sendTyping(state *renderState, now time.Time) {
+	if state == nil || state.ChatID == 0 {
+		return
+	}
+	r.mu.Lock()
+	if state.Done || (!state.LastTypingAt.IsZero() && now.Sub(state.LastTypingAt) < defaultTypingInterval) {
+		r.mu.Unlock()
+		return
+	}
+	state.LastTypingAt = now
+	r.mu.Unlock()
+	_ = r.messenger.SendChatAction(context.Background(), state.ChatID, "typing")
 }
 
 func (r *Renderer) sendProgress(ctx context.Context, state *renderState, now time.Time, force bool) error {
@@ -320,10 +390,14 @@ func (r *Renderer) startHeartbeatLoop() {
 
 func (r *Renderer) pulseHeartbeat(now time.Time) {
 	ready := make([]*renderState, 0)
+	typing := make([]*renderState, 0)
 	r.mu.Lock()
 	for _, state := range r.statesByTurn {
 		if state.Done || state.ChatID == 0 {
 			continue
+		}
+		if state.LastTypingAt.IsZero() || now.Sub(state.LastTypingAt) >= defaultTypingInterval {
+			typing = append(typing, state)
 		}
 		if now.Sub(state.LastEventAt) < r.heartbeatDelay {
 			continue
@@ -336,6 +410,9 @@ func (r *Renderer) pulseHeartbeat(now time.Time) {
 		ready = append(ready, &snapshot)
 	}
 	r.mu.Unlock()
+	for _, state := range typing {
+		r.sendTyping(state, now)
+	}
 
 	for _, state := range ready {
 		_ = r.sendProgress(context.Background(), state, now, true)
@@ -400,6 +477,9 @@ func parseEventText(raw json.RawMessage) string {
 		return ""
 	}
 	if value, ok := body["text"].(string); ok {
+		return value
+	}
+	if value, ok := body["delta"].(string); ok {
 		return value
 	}
 	if item, ok := body["item"].(map[string]any); ok {

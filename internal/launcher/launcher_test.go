@@ -25,6 +25,21 @@ func TestLauncherArgs(t *testing.T) {
 	}
 }
 
+func TestLauncherArgsStartsFreshRemoteThreadWhenThreadIDIsEmpty(t *testing.T) {
+	t.Parallel()
+
+	l := New(`C:\tools\codex.exe`, "ws://127.0.0.1:4500")
+	got := l.Args(`D:\repo`, "")
+	want := LaunchArgs{
+		"--cd", `D:\repo`,
+		"--remote", "ws://127.0.0.1:4500",
+		"--remote-auth-token-env", "CODEX_TG_REMOTE_TOKEN",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("Args() = %#v, want %#v", got, want)
+	}
+}
+
 func TestLauncherRunInjectsTokenInEnvNotArgs(t *testing.T) {
 	t.Parallel()
 	cwd := t.TempDir()
@@ -97,5 +112,13 @@ func TestLauncherRunRejectsMissingTokenAndRelativePath(t *testing.T) {
 	l.TokenEnv = ""
 	if err := l.Run(context.Background(), cwd, "thr-1", "secret"); !errors.Is(err, ErrInvalidLauncherConfig) {
 		t.Fatalf("Run(empty token env) error = %v", err)
+	}
+}
+
+func TestNewCommandAttachesCurrentTerminal(t *testing.T) {
+	cmd := newCommand(context.Background(), "codex", []string{"resume", "thr-1"}, []string{"TEST=value"})
+
+	if cmd.Stdin != os.Stdin || cmd.Stdout != os.Stdout || cmd.Stderr != os.Stderr {
+		t.Fatalf("terminal streams are not attached: stdin=%v stdout=%v stderr=%v", cmd.Stdin, cmd.Stdout, cmd.Stderr)
 	}
 }

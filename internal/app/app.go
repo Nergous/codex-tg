@@ -24,29 +24,44 @@ type Updates interface {
 }
 
 type Service struct {
-	supervisor  Supervisor
-	mu          sync.Mutex
-	endpoint    codex.AppServerEndpoint
-	started     bool
-	open        func(context.Context, string, bool) (string, error)
-	recover     func(context.Context) error
-	afterStart  func(context.Context, codex.AppServerEndpoint) error
-	ipc         *ipc.Server
-	threadID    string
-	projectPath string
+	supervisor         Supervisor
+	mu                 sync.Mutex
+	endpoint           codex.AppServerEndpoint
+	started            bool
+	open               func(context.Context, string, bool) (string, error)
+	prepareInteractive func(context.Context, string) error
+	adoptInteractive   func(context.Context, string, string) error
+	recover            func(context.Context) error
+	afterStart         func(context.Context, codex.AppServerEndpoint) error
+	ipc                *ipc.Server
+	threadID           string
+	projectPath        string
+	interactivePending bool
 }
 
 type CodexEventHandler func(context.Context, codex.Event) error
 type TurnCompleter func(context.Context, string, string) error
 
-func PumpCodexEvents(ctx context.Context, events <-chan codex.Event, handle CodexEventHandler, complete TurnCompleter) error {
+func PumpCodexEvents(ctx context.Context, events <-chan codex.Event, disconnects <-chan error, handle CodexEventHandler, complete TurnCompleter) error {
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case err, ok := <-disconnects:
+			if ok && err != nil {
+				return err
+			}
+			disconnects = nil
 		case event, ok := <-events:
 			if !ok {
-				return nil
+				select {
+				case err := <-disconnects:
+					if err != nil {
+						return err
+					}
+				default:
+				}
+				return codex.ErrDisconnected
 			}
 			if err := handle(ctx, event); err != nil {
 				return err
@@ -66,6 +81,7 @@ func (s *Service) RunBridge(
 	updates Updates,
 	handleUpdate func(context.Context, telegram.Update) error,
 	events <-chan codex.Event,
+	disconnects <-chan error,
 	handleEvent CodexEventHandler,
 	complete TurnCompleter,
 ) error {
@@ -74,7 +90,7 @@ func (s *Service) RunBridge(
 
 	results := make(chan error, 2)
 	go func() { results <- s.Poll(runCtx, updates, handleUpdate) }()
-	go func() { results <- PumpCodexEvents(runCtx, events, handleEvent, complete) }()
+	go func() { results <- PumpCodexEvents(runCtx, events, disconnects, handleEvent, complete) }()
 
 	err := <-results
 	if errors.Is(err, context.Canceled) && ctx.Err() == nil {
@@ -122,6 +138,35 @@ func (s *Service) Configure(open func(context.Context, string, bool) (string, er
 	s.afterStart = afterStart
 }
 
+func (s *Service) ConfigureInteractive(prepare func(context.Context, string) error, adopt func(context.Context, string, string) error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.prepareInteractive = prepare
+	s.adoptInteractive = adopt
+}
+
+func (s *Service) AdoptInteractiveThread(ctx context.Context, threadID string) error {
+	s.mu.Lock()
+	path := s.projectPath
+	adopt := s.adoptInteractive
+	pending := s.interactivePending
+	s.mu.Unlock()
+	if !pending {
+		return nil
+	}
+	if path == "" || threadID == "" || adopt == nil {
+		return errors.New("interactive thread adoption not configured")
+	}
+	if err := adopt(ctx, path, threadID); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.threadID = threadID
+	s.interactivePending = false
+	s.mu.Unlock()
+	return nil
+}
+
 func (s *Service) Stop(context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -137,6 +182,7 @@ func (s *Service) Stop(context.Context) error {
 	s.endpoint = codex.AppServerEndpoint{}
 	s.threadID = ""
 	s.projectPath = ""
+	s.interactivePending = false
 	return err
 }
 
@@ -172,6 +218,20 @@ func (s *Service) Open(ctx context.Context, req ipc.OpenRequest) (ipc.OpenRespon
 	if err != nil {
 		return ipc.OpenResponse{}, err
 	}
+	if req.Interactive {
+		if s.prepareInteractive == nil {
+			return ipc.OpenResponse{}, errors.New("interactive open service not configured")
+		}
+		if err := s.prepareInteractive(ctx, req.ProjectPath); err != nil {
+			return ipc.OpenResponse{}, err
+		}
+		s.mu.Lock()
+		s.threadID = ""
+		s.projectPath = req.ProjectPath
+		s.interactivePending = true
+		s.mu.Unlock()
+		return ipc.OpenResponse{Endpoint: endpoint.URL, Token: endpoint.Token}, nil
+	}
 	if s.open == nil {
 		return ipc.OpenResponse{}, errors.New("open service not configured")
 	}
@@ -182,6 +242,7 @@ func (s *Service) Open(ctx context.Context, req ipc.OpenRequest) (ipc.OpenRespon
 	s.mu.Lock()
 	s.threadID = thread
 	s.projectPath = req.ProjectPath
+	s.interactivePending = false
 	s.mu.Unlock()
 	return ipc.OpenResponse{ThreadID: thread, Endpoint: endpoint.URL, Token: endpoint.Token}, nil
 }

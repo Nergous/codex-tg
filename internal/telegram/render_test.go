@@ -13,9 +13,11 @@ import (
 )
 
 type renderFakeMessenger struct {
-	mu    sync.Mutex
-	sends []sendCall
-	edits []struct {
+	mu        sync.Mutex
+	sends     []sendCall
+	reactions []string
+	actions   []string
+	edits     []struct {
 		chatID    int64
 		messageID int64
 		text      string
@@ -59,6 +61,20 @@ func (f *renderFakeMessenger) Edit(_ context.Context, chatID, messageID int64, t
 }
 
 func (f *renderFakeMessenger) AnswerCallback(_ context.Context, _, _ string) error {
+	return nil
+}
+
+func (f *renderFakeMessenger) SetReaction(_ context.Context, _ int64, _ int64, emoji string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.reactions = append(f.reactions, emoji)
+	return nil
+}
+
+func (f *renderFakeMessenger) SendChatAction(_ context.Context, _ int64, action string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.actions = append(f.actions, action)
 	return nil
 }
 
@@ -180,6 +196,52 @@ func TestRendererBuildsFinalFromAgentMessageLifecycle(t *testing.T) {
 	}
 }
 
+func TestRendererDoesNotDuplicateCompletedAgentMessageAfterDeltas(t *testing.T) {
+	messenger := &renderFakeMessenger{}
+	r := NewRenderer(RendererOptions{Messenger: messenger, HeartbeatDelay: 24 * time.Hour})
+	r.SetThread(1001, "thr-1", "/repo/demo")
+
+	const answer = "Взбей яйца и добавь молоко."
+	if err := r.OnEvent(context.Background(), testEvent("item/agentMessage/delta", "thr-1", "turn-1", `{"delta":"`+answer+`"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.OnEvent(context.Background(), testEvent("item/completed", "thr-1", "turn-1", `{"item":{"type":"agentMessage","text":"`+answer+`"}}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.OnEvent(context.Background(), testEvent("turn/completed", "thr-1", "turn-1", `{}`)); err != nil {
+		t.Fatal(err)
+	}
+
+	sends := messenger.snapshotSends()
+	if got := sends[len(sends)-1].text; got != answer {
+		t.Fatalf("final response = %q, want %q", got, answer)
+	}
+}
+
+func TestRendererDeduplicatesEachStreamedAgentMessageByItemID(t *testing.T) {
+	messenger := &renderFakeMessenger{}
+	r := NewRenderer(RendererOptions{Messenger: messenger, HeartbeatDelay: 24 * time.Hour})
+	r.SetThread(1001, "thr-1", "/repo/demo")
+
+	events := []codex.Event{
+		{Method: "item/agentMessage/delta", ThreadID: "thr-1", TurnID: "turn-1", ItemID: "item-progress", Text: "Осмотрю проект."},
+		{Method: "item/completed", ThreadID: "thr-1", TurnID: "turn-1", ItemID: "item-progress", Text: "Осмотрю проект."},
+		{Method: "item/agentMessage/delta", ThreadID: "thr-1", TurnID: "turn-1", ItemID: "item-final", Text: "Это библиотека."},
+		{Method: "item/completed", ThreadID: "thr-1", TurnID: "turn-1", ItemID: "item-final", Text: "Это библиотека."},
+		{Method: "turn/completed", ThreadID: "thr-1", TurnID: "turn-1"},
+	}
+	for _, event := range events {
+		if err := r.OnEvent(context.Background(), event); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	sends := messenger.snapshotSends()
+	if got, want := sends[len(sends)-1].text, "Осмотрю проект.\n\nЭто библиотека."; got != want {
+		t.Fatalf("final response = %q, want %q", got, want)
+	}
+}
+
 func TestRendererSplitsLargeFinalOutputAt3900UTF8(t *testing.T) {
 	now := time.Now()
 	huge := make([]byte, defaultFinalChunkBytes*2)
@@ -276,5 +338,30 @@ func TestRendererUsesTerminalFallbackWhenNoAgentText(t *testing.T) {
 	}
 	if sendCalls[0].text != "turn failed" {
 		t.Fatalf("final response = %q, want %q", sendCalls[0].text, "turn failed")
+	}
+}
+
+func TestRendererTypesAndMarksCompletedInput(t *testing.T) {
+	now := time.Now()
+	messenger := &renderFakeMessenger{}
+	r := NewRenderer(RendererOptions{Messenger: messenger, Now: func() time.Time { return now }})
+	t.Cleanup(func() { r.Shutdown(context.Background()) })
+	r.SetThread(1001, "thr-1", "/repo/demo")
+	r.AddInputMessage("thr-1", 77)
+
+	if err := r.OnEvent(context.Background(), testEvent("item/agentMessage/delta", "thr-1", "turn-1", `{"text":"done"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.OnEvent(context.Background(), testEvent("turn/completed", "thr-1", "turn-1", `{}`)); err != nil {
+		t.Fatal(err)
+	}
+
+	messenger.mu.Lock()
+	defer messenger.mu.Unlock()
+	if len(messenger.actions) != 1 || messenger.actions[0] != "typing" {
+		t.Fatalf("actions = %v, want [typing]", messenger.actions)
+	}
+	if len(messenger.reactions) != 1 || messenger.reactions[0] != "✅" {
+		t.Fatalf("reactions = %v, want [✅]", messenger.reactions)
 	}
 }

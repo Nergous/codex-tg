@@ -5,11 +5,16 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/Nergous/codex-tg/internal/codex"
 	"github.com/Nergous/codex-tg/internal/models"
 	"github.com/Nergous/codex-tg/internal/state"
 )
 
-type fakeCodex struct{ started, resumed, turns, interrupted []string }
+type fakeCodex struct {
+	started, resumed, turns, interrupted []string
+	resumeErr                            error
+	resumeErrors                         []error
+}
 
 func (f *fakeCodex) StartThread(context.Context, string) (string, error) {
 	f.started = append(f.started, "thr-new")
@@ -17,7 +22,12 @@ func (f *fakeCodex) StartThread(context.Context, string) (string, error) {
 }
 func (f *fakeCodex) ResumeThread(_ context.Context, id string) error {
 	f.resumed = append(f.resumed, id)
-	return nil
+	if len(f.resumeErrors) > 0 {
+		err := f.resumeErrors[0]
+		f.resumeErrors = f.resumeErrors[1:]
+		return err
+	}
+	return f.resumeErr
 }
 func (f *fakeCodex) StartTurn(_ context.Context, thread, prompt string) (string, error) {
 	f.turns = append(f.turns, thread+":"+prompt)
@@ -43,6 +53,95 @@ func TestOpenProjectReusesPersistedThread(t *testing.T) {
 	}
 	if s.ThreadID != "thr-old" || len(fake.resumed) != 1 {
 		t.Fatalf("session=%+v resumed=%v", s, fake.resumed)
+	}
+}
+
+func TestOpenProjectStartsNewThreadWhenPersistedRolloutIsMissing(t *testing.T) {
+	ctx := context.Background()
+	db, err := state.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	project := models.Project{Name: "demo", Path: t.TempDir()}
+	if err := db.PutProject(ctx, &project); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetActiveSession(ctx, &models.Session{
+		ProjectPath: project.Path,
+		ThreadID:    "thr-missing",
+		Active:      true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	fake := &fakeCodex{resumeErr: codex.ErrThreadRolloutNotFound}
+	coordinator := New(fake, db, []models.Project{project})
+	session, err := coordinator.OpenProject(ctx, project.Path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.ThreadID != "thr-new" {
+		t.Fatalf("thread = %q, want thr-new", session.ThreadID)
+	}
+	if got, want := fake.resumed, []string{"thr-missing"}; !sameStrings(got, want) {
+		t.Fatalf("resumed = %v, want %v", got, want)
+	}
+	if got, want := fake.started, []string{"thr-new"}; !sameStrings(got, want) {
+		t.Fatalf("started = %v, want %v", got, want)
+	}
+}
+
+func TestAdoptThreadPersistsTUIStartedSession(t *testing.T) {
+	ctx := context.Background()
+	db, err := state.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	project := models.Project{Name: "demo", Path: t.TempDir()}
+	if err := db.PutProject(ctx, &project); err != nil {
+		t.Fatal(err)
+	}
+
+	fake := &fakeCodex{}
+	coordinator := New(fake, db, []models.Project{project})
+	if err := coordinator.AdoptThread(ctx, project.Path, "thr-tui"); err != nil {
+		t.Fatal(err)
+	}
+	session, err := db.ActiveSession(ctx, project.Path)
+	if err != nil || session.ThreadID != "thr-tui" {
+		t.Fatalf("session=%+v error=%v", session, err)
+	}
+}
+
+func TestSubmitSubscribesToAdoptedThreadAfterRolloutMaterializes(t *testing.T) {
+	ctx := context.Background()
+	db, err := state.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	project := models.Project{Name: "demo", Path: t.TempDir()}
+	if err := db.PutProject(ctx, &project); err != nil {
+		t.Fatal(err)
+	}
+
+	fake := &fakeCodex{resumeErrors: []error{codex.ErrThreadRolloutNotFound, nil}}
+	coordinator := New(fake, db, []models.Project{project})
+	coordinator.subscriptionDelay = 0
+	if err := coordinator.AdoptThread(ctx, project.Path, "thr-tui"); err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.Submit(ctx, "thr-tui", "hello"); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := fake.resumed, []string{"thr-tui", "thr-tui"}; !sameStrings(got, want) {
+		t.Fatalf("resumed = %v, want %v", got, want)
+	}
+	if got, want := fake.turns, []string{"thr-tui:hello"}; !sameStrings(got, want) {
+		t.Fatalf("turns = %v, want %v", got, want)
 	}
 }
 

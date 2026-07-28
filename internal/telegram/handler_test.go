@@ -284,10 +284,28 @@ func TestQueueCommandListsQueuedPrompts(t *testing.T) {
 	}
 }
 
+func TestAdoptThreadSwitchesTelegramChatToInteractiveProject(t *testing.T) {
+	handler, coordinator, _, _ := newFixture(t, 100, 200)
+	handler.AdoptThread(200, `D:\Files\go\maat`, "thr-maat")
+
+	if err := handler.Handle(context.Background(), messageUpdate(100, 200, "private", "hello")); err != nil {
+		t.Fatal(err)
+	}
+	if len(coordinator.submitCalls) != 1 || coordinator.submitCalls[0].threadID != "thr-maat" {
+		t.Fatalf("submit calls = %+v", coordinator.submitCalls)
+	}
+	state := handler.state(200)
+	if state.project != `D:\Files\go\maat` || state.thread != "thr-maat" {
+		t.Fatalf("chat state = %+v", state)
+	}
+}
+
 type fakeMessenger struct {
-	mu      sync.Mutex
-	sends   []sendCall
-	answers int
+	mu        sync.Mutex
+	sends     []sendCall
+	answers   int
+	reactions []string
+	actions   []string
 }
 
 type sendCall struct {
@@ -312,6 +330,19 @@ func (f *fakeMessenger) AnswerCallback(_ context.Context, _ string, _ string) er
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.answers++
+	return nil
+}
+
+func (f *fakeMessenger) SetReaction(_ context.Context, _ int64, _ int64, emoji string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.reactions = append(f.reactions, emoji)
+	return nil
+}
+func (f *fakeMessenger) SendChatAction(_ context.Context, _ int64, action string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.actions = append(f.actions, action)
 	return nil
 }
 
@@ -486,6 +517,19 @@ func TestHandlePromptUsesDefaultProject(t *testing.T) {
 	}
 	if len(coord.submitCalls) != 1 {
 		t.Fatalf("submit calls = %d, want 1", len(coord.submitCalls))
+	}
+}
+
+func TestHandlePromptMarksMessageSeen(t *testing.T) {
+	handler, _, messenger, _ := newFixture(t, 100, 200)
+
+	if err := handler.Handle(context.Background(), messageUpdate(100, 200, "private", "change files")); err != nil {
+		t.Fatal(err)
+	}
+	messenger.mu.Lock()
+	defer messenger.mu.Unlock()
+	if len(messenger.reactions) != 1 || messenger.reactions[0] != "👀" {
+		t.Fatalf("reactions = %v, want [👀]", messenger.reactions)
 	}
 }
 

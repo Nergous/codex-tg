@@ -25,6 +25,7 @@ type Event struct {
 	Method    string          `json:"-"`
 	ThreadID  string          `json:"-"`
 	TurnID    string          `json:"-"`
+	ItemID    string          `json:"-"`
 	Text      string          `json:"-"`
 	RequestID json.RawMessage `json:"-"`
 	Raw       json.RawMessage `json:"-"`
@@ -51,6 +52,7 @@ type threadStartParams struct {
 	CWD            string `json:"cwd"`
 	Sandbox        string `json:"sandbox"`
 	ApprovalPolicy string `json:"approvalPolicy"`
+	Ephemeral      bool   `json:"ephemeral"`
 }
 
 type threadStartResult struct {

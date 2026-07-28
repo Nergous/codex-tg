@@ -30,6 +30,7 @@ type Service interface {
 type OpenRequest struct {
 	ProjectPath string `json:"project_path"`
 	NewSession  bool   `json:"new"`
+	Interactive bool   `json:"interactive"`
 }
 
 type OpenResponse struct {

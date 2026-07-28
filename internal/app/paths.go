@@ -13,6 +13,10 @@ func ConfigPath() string {
 	return filepath.Join(base, "codex-tg", "config.json")
 }
 
-func DataPath() string { return filepath.Join(filepath.Dir(ConfigPath()), "state.db") }
+func DataPath() string {
+	return filepath.Join(filepath.Dir(ConfigPath()), "state.db")
+}
 
-func RuntimePath() string { return filepath.Join(filepath.Dir(ConfigPath()), "runtime.json") }
+func RuntimePath() string {
+	return filepath.Join(filepath.Dir(ConfigPath()), "runtime.json")
+}

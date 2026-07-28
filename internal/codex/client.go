@@ -20,15 +20,16 @@ import (
 
 const (
 	defaultEventBufferSize = 16
+	appServerReadLimit     = 10 * 1024 * 1024
 )
 
 var (
-	ErrNotInitialized     = errors.New("not initialized")
-	ErrAlreadyInitialized = errors.New("already initialized")
-	ErrDisconnected       = errors.New("app server disconnected")
-	ErrEventBackpressure  = errors.New("event channel full")
-	ErrInvalidRPCFrame    = errors.New("invalid rpc frame")
-	ErrInvalidRequestID   = errors.New("invalid request id")
+	ErrNotInitialized        = errors.New("not initialized")
+	ErrAlreadyInitialized    = errors.New("already initialized")
+	ErrDisconnected          = errors.New("app server disconnected")
+	ErrThreadRolloutNotFound = errors.New("thread rollout not found")
+	ErrInvalidRPCFrame       = errors.New("invalid rpc frame")
+	ErrInvalidRequestID      = errors.New("invalid request id")
 )
 
 type Client struct {
@@ -44,7 +45,12 @@ type Client struct {
 	pendingMu sync.Mutex
 	pending   map[int64]chan response
 
-	events chan Event
+	events     chan Event
+	eventMu    sync.Mutex
+	eventQueue []Event
+	eventWake  chan struct{}
+	eventDone  chan struct{}
+	errors     chan error
 }
 
 type incomingRPC struct {
@@ -74,29 +80,43 @@ func Dial(ctx context.Context, wsURL, token string) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	conn.SetReadLimit(appServerReadLimit)
 
 	client := &Client{
-		conn:    conn,
-		pending: make(map[int64]chan response),
-		events:  make(chan Event, defaultEventBufferSize),
+		conn:      conn,
+		pending:   make(map[int64]chan response),
+		events:    make(chan Event, defaultEventBufferSize),
+		eventWake: make(chan struct{}, 1),
+		eventDone: make(chan struct{}),
+		errors:    make(chan error, 1),
 	}
+	go client.dispatchEvents()
 	go client.readLoop()
 	return client, nil
 }
 
 func (c *Client) Close() error {
+	return c.closeWithError(ErrDisconnected)
+}
+
+func (c *Client) closeWithError(cause error) error {
 	c.closeMu.Lock()
 	if c.closed {
 		c.closeMu.Unlock()
 		return nil
 	}
 	c.closed = true
+	c.errors <- cause
+	close(c.errors)
+	close(c.eventDone)
 	c.closeMu.Unlock()
 
 	c.failPending(ErrDisconnected)
 	_ = c.conn.Close(websocket.StatusNormalClosure, "client closing")
 	return nil
 }
+
+func (c *Client) Errors() <-chan error { return c.errors }
 
 func (c *Client) Initialize(ctx context.Context, info ClientInfo) error {
 	if c.conn == nil {
@@ -126,6 +146,7 @@ func (c *Client) StartThread(ctx context.Context, cwd string) (string, error) {
 		CWD:            filepath.Clean(cwd),
 		Sandbox:        "workspace-write",
 		ApprovalPolicy: "on-request",
+		Ephemeral:      false,
 	}, &out); err != nil {
 		return "", err
 	}
@@ -138,12 +159,21 @@ func (c *Client) ResumeThread(ctx context.Context, threadID string) error {
 	}
 	var out threadResumeResult
 	if err := c.call(ctx, "thread/resume", threadResumeParams{ThreadID: threadID}, &out); err != nil {
+		if isThreadRolloutNotFound(err) {
+			return fmt.Errorf("%w: %v", ErrThreadRolloutNotFound, err)
+		}
 		return err
 	}
 	if out.Thread.ID != threadID {
 		return fmt.Errorf("unexpected thread id: %q", out.Thread.ID)
 	}
 	return nil
+}
+
+func isThreadRolloutNotFound(err error) bool {
+	var rpcErr *RPCError
+	return errors.As(err, &rpcErr) &&
+		strings.Contains(strings.ToLower(rpcErr.Message), "no rollout found for thread id")
 }
 
 func (c *Client) StartTurn(ctx context.Context, threadID, prompt string) (string, error) {
@@ -326,7 +356,7 @@ func (c *Client) readLoop() {
 	for {
 		var raw json.RawMessage
 		if err := wsjson.Read(context.Background(), c.conn, &raw); err != nil {
-			_ = c.Close()
+			_ = c.closeWithError(fmt.Errorf("read app server websocket: %w", err))
 			return
 		}
 
@@ -382,18 +412,76 @@ func (c *Client) handleEvent(method string, rawID json.RawMessage, params json.R
 	var body struct {
 		ThreadID string `json:"threadId"`
 		TurnID   string `json:"turnId"`
+		ItemID   string `json:"itemId"`
 		Text     string `json:"text"`
+		Delta    string `json:"delta"`
+		Thread   struct {
+			ID string `json:"id"`
+		} `json:"thread"`
+		Turn struct {
+			ID string `json:"id"`
+		} `json:"turn"`
+		Item struct {
+			ID   string `json:"id"`
+			Text string `json:"text"`
+		} `json:"item"`
 	}
 	_ = json.Unmarshal(params, &body)
 	event.ThreadID = body.ThreadID
+	if event.ThreadID == "" {
+		event.ThreadID = body.Thread.ID
+	}
 	event.TurnID = body.TurnID
+	if event.TurnID == "" {
+		event.TurnID = body.Turn.ID
+	}
+	event.ItemID = body.ItemID
+	if event.ItemID == "" {
+		event.ItemID = body.Item.ID
+	}
 	event.Text = body.Text
+	if event.Text == "" {
+		event.Text = body.Delta
+	}
+	if event.Text == "" {
+		event.Text = body.Item.Text
+	}
 
+	c.eventMu.Lock()
+	c.eventQueue = append(c.eventQueue, event)
+	c.eventMu.Unlock()
 	select {
-	case c.events <- event:
+	case c.eventWake <- struct{}{}:
 	default:
-		c.failPending(ErrEventBackpressure)
-		c.Close()
+	}
+}
+
+func (c *Client) dispatchEvents() {
+	defer close(c.events)
+	for {
+		select {
+		case <-c.eventDone:
+			return
+		case <-c.eventWake:
+		}
+
+		for {
+			c.eventMu.Lock()
+			if len(c.eventQueue) == 0 {
+				c.eventMu.Unlock()
+				break
+			}
+			event := c.eventQueue[0]
+			c.eventQueue[0] = Event{}
+			c.eventQueue = c.eventQueue[1:]
+			c.eventMu.Unlock()
+
+			select {
+			case c.events <- event:
+			case <-c.eventDone:
+				return
+			}
+		}
 	}
 }
 

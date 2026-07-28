@@ -141,6 +141,23 @@ func TestSupervisorProbeCompatibilityRejectsMissingThreadListShape(t *testing.T)
 	}
 }
 
+func TestSupervisorProbeCompatibilityAcceptsCurrentThreadListShape(t *testing.T) {
+	server := newSupervisorCompatibilityServer(t, `{"data":[],"nextCursor":null,"backwardsCursor":null}`, 0)
+	serverURL := server.Listener.Addr().String()
+	defer server.Close()
+
+	s := &Supervisor{
+		Binary: "codex",
+		versionFn: func(context.Context) (string, error) {
+			return "codex codex-cli 0.144.6", nil
+		},
+	}
+
+	if err := s.ProbeCompatibility(context.Background(), ensureWSScheme(serverURL), "capability-token"); err != nil {
+		t.Fatalf("ProbeCompatibility() error = %v", err)
+	}
+}
+
 func TestSupervisorRestartPolicyStopsAfterLimitedFailures(t *testing.T) {
 	s := &Supervisor{
 		Binary:           "ignored",
