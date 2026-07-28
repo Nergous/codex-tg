@@ -27,6 +27,7 @@ func TestLauncherArgs(t *testing.T) {
 
 func TestLauncherRunInjectsTokenInEnvNotArgs(t *testing.T) {
 	t.Parallel()
+	cwd := t.TempDir()
 
 	capture := struct {
 		binary string
@@ -48,7 +49,7 @@ func TestLauncherRunInjectsTokenInEnvNotArgs(t *testing.T) {
 	}
 
 	const token = "secret-token"
-	if err := l.Run(context.Background(), `D:\repo`, "thr-123", token); err != nil {
+	if err := l.Run(context.Background(), cwd, "thr-123", token); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 
@@ -86,6 +87,7 @@ func TestLauncherRunInjectsTokenInEnvNotArgs(t *testing.T) {
 
 func TestLauncherRunRejectsMissingTokenAndRelativePath(t *testing.T) {
 	t.Parallel()
+	cwd := t.TempDir()
 
 	l := New(`C:\tools\codex.exe`, "ws://127.0.0.1:4500")
 	if err := l.Run(context.Background(), `repo\relative`, "thr-1", "secret"); !errors.Is(err, ErrInvalidLauncherConfig) {
@@ -93,7 +95,7 @@ func TestLauncherRunRejectsMissingTokenAndRelativePath(t *testing.T) {
 	}
 
 	l.TokenEnv = ""
-	if err := l.Run(context.Background(), `D:\repo`, "thr-1", "secret"); !errors.Is(err, ErrInvalidLauncherConfig) {
+	if err := l.Run(context.Background(), cwd, "thr-1", "secret"); !errors.Is(err, ErrInvalidLauncherConfig) {
 		t.Fatalf("Run(empty token env) error = %v", err)
 	}
 }

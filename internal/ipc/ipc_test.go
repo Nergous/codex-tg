@@ -8,9 +8,10 @@ import (
 
 func TestServerClientRoundTripOpenStatusStop(t *testing.T) {
 	t.Parallel()
+	projectPath := t.TempDir()
 
 	service := &fakeService{
-		status: StatusResponse{ThreadID: "thr-1", ProjectPath: "D:\\repo", Running: true},
+		status: StatusResponse{ThreadID: "thr-1", ProjectPath: projectPath, Running: true},
 		open:   OpenResponse{ThreadID: "thr-1", Endpoint: "ws://127.0.0.1:4500", Token: "tok"},
 	}
 	server := NewServer(service, "local-token")
@@ -21,7 +22,7 @@ func TestServerClientRoundTripOpenStatusStop(t *testing.T) {
 	t.Cleanup(func() { _ = server.Close() })
 
 	client := NewClient(addr, "local-token")
-	openResp, err := client.Open(context.Background(), OpenRequest{ProjectPath: "D:\\repo", NewSession: true})
+	openResp, err := client.Open(context.Background(), OpenRequest{ProjectPath: projectPath, NewSession: true})
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -33,8 +34,8 @@ func TestServerClientRoundTripOpenStatusStop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Status() error = %v", err)
 	}
-	if statusResp.ProjectPath != "D:\\repo" {
-		t.Fatalf("status path = %q, want %q", statusResp.ProjectPath, "D:\\repo")
+	if statusResp.ProjectPath != projectPath {
+		t.Fatalf("status path = %q, want %q", statusResp.ProjectPath, projectPath)
 	}
 
 	if err := client.Stop(context.Background()); err != nil {

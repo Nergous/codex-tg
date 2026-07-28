@@ -192,6 +192,12 @@ func validateOpenRequest(req OpenRequest) error {
 	if !filepath.IsAbs(path) {
 		return badRequest("project path must be absolute")
 	}
+	rawSlashed := strings.ReplaceAll(path, "\\", "/")
+	for component := range strings.SplitSeq(rawSlashed, "/") {
+		if component == ".." {
+			return badRequest("project path is invalid")
+		}
+	}
 	cleaned := filepath.Clean(path)
 	slashed := strings.ReplaceAll(cleaned, "\\", "/")
 	if strings.Contains(slashed, "/../") || strings.HasSuffix(slashed, "/..") {
