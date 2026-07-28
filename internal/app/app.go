@@ -33,10 +33,27 @@ type Service struct {
 	adoptInteractive   func(context.Context, string, string) error
 	recover            func(context.Context) error
 	afterStart         func(context.Context, codex.AppServerEndpoint) error
+	registerProject    func(context.Context, ipc.ProjectRequest) error
 	ipc                *ipc.Server
 	threadID           string
 	projectPath        string
 	interactivePending bool
+}
+
+func (s *Service) ConfigureProjectRegistration(register func(context.Context, ipc.ProjectRequest) error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.registerProject = register
+}
+
+func (s *Service) RegisterProject(ctx context.Context, project ipc.ProjectRequest) error {
+	s.mu.Lock()
+	register := s.registerProject
+	s.mu.Unlock()
+	if register == nil {
+		return errors.New("project registration is not configured")
+	}
+	return register(ctx, project)
 }
 
 type CodexEventHandler func(context.Context, codex.Event) error

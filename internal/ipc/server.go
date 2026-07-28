@@ -12,9 +12,10 @@ import (
 )
 
 const (
-	openPath   = "/v1/open"
-	statusPath = "/v1/status"
-	stopPath   = "/v1/stop"
+	openPath    = "/v1/open"
+	statusPath  = "/v1/status"
+	stopPath    = "/v1/stop"
+	projectPath = "/v1/project"
 )
 
 var (
@@ -25,6 +26,7 @@ type Service interface {
 	Open(ctx context.Context, request OpenRequest) (OpenResponse, error)
 	Status(ctx context.Context) (StatusResponse, error)
 	Stop(ctx context.Context) error
+	RegisterProject(ctx context.Context, project ProjectRequest) error
 }
 
 type OpenRequest struct {
@@ -43,6 +45,12 @@ type StatusResponse struct {
 	ThreadID    string `json:"thread_id"`
 	ProjectPath string `json:"project_path"`
 	Running     bool   `json:"running"`
+}
+
+type ProjectRequest struct {
+	Name    string `json:"name"`
+	Path    string `json:"path"`
+	Enabled bool   `json:"enabled"`
 }
 
 type Server struct {
@@ -92,7 +100,37 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc(openPath, s.handleOpen)
 	mux.HandleFunc(statusPath, s.handleStatus)
 	mux.HandleFunc(stopPath, s.handleStop)
+	mux.HandleFunc(projectPath, s.handleProject)
 	return mux
+}
+
+func (s *Server) handleProject(w http.ResponseWriter, r *http.Request) {
+	if err := s.authorize(r); err != nil {
+		respondError(w, err)
+		return
+	}
+	if err := ensureMethod(w, r, http.MethodPost); err != nil {
+		respondError(w, err)
+		return
+	}
+	var project ProjectRequest
+	if err := json.NewDecoder(r.Body).Decode(&project); err != nil {
+		respondError(w, badRequest("invalid request body"))
+		return
+	}
+	if strings.TrimSpace(project.Name) == "" {
+		respondError(w, badRequest("project name is required"))
+		return
+	}
+	if err := validateOpenRequest(OpenRequest{ProjectPath: project.Path}); err != nil {
+		respondError(w, err)
+		return
+	}
+	if err := s.service.RegisterProject(r.Context(), project); err != nil {
+		respondError(w, internalError(err.Error()))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 func (s *Server) handleOpen(w http.ResponseWriter, r *http.Request) {

@@ -29,6 +29,11 @@ available commands:
 /status, /projects, /project <name>, /new, /resume [thread], /sessions [thread],
 /diff [full], /cancel, /lock, /unlock <token>, /queue`
 
+const startText = `codex-tg is connected.
+available commands:
+/status, /projects, /project <name>, /new, /resume [thread], /sessions [thread],
+/diff [full], /cancel, /lock, /unlock <token>, /queue`
+
 var (
 	errNoProject    = errors.New("no project configured")
 	errInvalidNonce = errors.New("invalid nonce")
@@ -228,6 +233,8 @@ func (h *Handler) handlePrompt(ctx context.Context, chatID, messageID int64, tex
 
 func (h *Handler) processCommand(ctx context.Context, chatID int64, command string, args []string) error {
 	switch command {
+	case "start":
+		return h.notify(ctx, chatID, startText)
 	case "status":
 		threadID, err := h.ensureThread(ctx, chatID)
 		if err != nil {

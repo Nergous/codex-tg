@@ -24,6 +24,13 @@ func TestServerClientRoundTripOpenStatusStop(t *testing.T) {
 	t.Cleanup(func() { _ = server.Close() })
 
 	client := NewClient(addr, "local-token")
+	project := ProjectRequest{Name: "demo", Path: projectPath, Enabled: true}
+	if err := client.RegisterProject(context.Background(), project); err != nil {
+		t.Fatalf("RegisterProject() error = %v", err)
+	}
+	if service.project != project {
+		t.Fatalf("registered=%+v want=%+v", service.project, project)
+	}
 	openResp, err := client.Open(context.Background(), OpenRequest{ProjectPath: projectPath, NewSession: true})
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
@@ -138,6 +145,12 @@ type fakeService struct {
 	openErr   error
 	stopCalls int
 	openCalls int
+	project   ProjectRequest
+}
+
+func (f *fakeService) RegisterProject(_ context.Context, project ProjectRequest) error {
+	f.project = project
+	return nil
 }
 
 func (f *fakeService) Open(context.Context, OpenRequest) (OpenResponse, error) {

@@ -56,6 +56,13 @@ func (c *Client) Stop(ctx context.Context) error {
 	return c.call(ctx, http.MethodPost, stopPath, nil, &struct{}{})
 }
 
+func (c *Client) RegisterProject(ctx context.Context, project ProjectRequest) error {
+	if err := c.validate(); err != nil {
+		return err
+	}
+	return c.call(ctx, http.MethodPost, projectPath, project, &struct{}{})
+}
+
 func (c *Client) validate() error {
 	if strings.TrimSpace(c.baseURL) == "" || strings.TrimSpace(c.token) == "" {
 		return errEmptyIPCClientConfig

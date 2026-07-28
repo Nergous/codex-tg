@@ -15,6 +15,8 @@ import (
 type Child interface{ Kill() error }
 type Unlock func() error
 
+const startupLockStaleAfter = 30 * time.Second
+
 type Manager struct {
 	Load         func() (app.RuntimeInfo, error)
 	Probe        func(context.Context, app.RuntimeInfo) error
@@ -22,13 +24,14 @@ type Manager struct {
 	Acquire      func() (Unlock, error)
 	Timeout      time.Duration
 	PollInterval time.Duration
+	ProbeTimeout time.Duration
 }
 
 func (m Manager) Ensure(ctx context.Context) (app.RuntimeInfo, error) {
 	if m.Load == nil || m.Probe == nil || m.Start == nil {
 		return app.RuntimeInfo{}, errors.New("service manager is not configured")
 	}
-	if info, err := m.Load(); err == nil && m.Probe(ctx, info) == nil {
+	if info, err := m.Load(); err == nil && m.probe(ctx, info) == nil {
 		return info, nil
 	}
 	unlock := Unlock(func() error { return nil })
@@ -40,7 +43,7 @@ func (m Manager) Ensure(ctx context.Context) (app.RuntimeInfo, error) {
 		}
 	}
 	defer unlock()
-	if info, err := m.Load(); err == nil && m.Probe(ctx, info) == nil {
+	if info, err := m.Load(); err == nil && m.probe(ctx, info) == nil {
 		return info, nil
 	}
 	child, err := m.Start()
@@ -68,11 +71,21 @@ func (m Manager) Ensure(ctx context.Context) (app.RuntimeInfo, error) {
 			_ = child.Kill()
 			return app.RuntimeInfo{}, errors.New("service readiness timeout; run `codex-tg serve` or `codex-tg status`")
 		case <-ticker.C:
-			if info, loadErr := m.Load(); loadErr == nil && m.Probe(ctx, info) == nil {
+			if info, loadErr := m.Load(); loadErr == nil && m.probe(ctx, info) == nil {
 				return info, nil
 			}
 		}
 	}
+}
+
+func (m Manager) probe(ctx context.Context, info app.RuntimeInfo) error {
+	timeout := m.ProbeTimeout
+	if timeout <= 0 {
+		timeout = 500 * time.Millisecond
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return m.Probe(probeCtx, info)
 }
 
 func DefaultManager(runtimePath string) Manager {
@@ -93,16 +106,34 @@ func acquireFileLock(path string) (Unlock, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	if err != nil {
-		return nil, err
-	}
-	return func() error {
-		closeErr := file.Close()
-		removeErr := os.Remove(path)
-		if closeErr != nil {
-			return closeErr
+	for attempt := 0; attempt < 2; attempt++ {
+		file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err == nil {
+			return func() error {
+				closeErr := file.Close()
+				removeErr := os.Remove(path)
+				if closeErr != nil {
+					return closeErr
+				}
+				return removeErr
+			}, nil
 		}
-		return removeErr
-	}, nil
+		if !errors.Is(err, os.ErrExist) {
+			return nil, err
+		}
+		info, statErr := os.Stat(path)
+		if errors.Is(statErr, os.ErrNotExist) {
+			continue
+		}
+		if statErr != nil {
+			return nil, statErr
+		}
+		if time.Since(info.ModTime()) <= startupLockStaleAfter {
+			return nil, err
+		}
+		if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			return nil, removeErr
+		}
+	}
+	return nil, errors.New("service startup lock is already held")
 }

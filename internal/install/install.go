@@ -58,3 +58,15 @@ func CopyExecutable(source, target string, replace bool) error {
 	}
 	return os.Rename(temporaryPath, target)
 }
+
+func PreferredExecutable(fallback string) string {
+	target, err := Target()
+	if err != nil {
+		return fallback
+	}
+	info, err := os.Stat(target)
+	if err != nil || info.IsDir() {
+		return fallback
+	}
+	return target
+}

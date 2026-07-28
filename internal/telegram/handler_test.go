@@ -588,6 +588,19 @@ func TestHelpCommandSendsCommandsList(t *testing.T) {
 	}
 }
 
+func TestStartCommandConfirmsConnection(t *testing.T) {
+	t.Parallel()
+	handler, _, messenger, _ := newFixture(t, 100, 200)
+	if err := handler.Handle(context.Background(), messageUpdate(100, 200, "private", "/start")); err != nil {
+		t.Fatal(err)
+	}
+	messenger.mu.Lock()
+	defer messenger.mu.Unlock()
+	if len(messenger.sends) == 0 || strings.Contains(messenger.sends[0].text, "unknown command") || !strings.Contains(messenger.sends[0].text, "connected") {
+		t.Fatalf("response=%#v", messenger.sends)
+	}
+}
+
 func TestHandleIgnoresCommandInMiddleOfText(t *testing.T) {
 	t.Parallel()
 	handler, coord, _, _ := newFixture(t, 100, 200)

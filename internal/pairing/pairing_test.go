@@ -8,8 +8,14 @@ import (
 )
 
 type fakeBot struct {
-	batches [][]telegram.Update
-	calls   int
+	batches  [][]telegram.Update
+	calls    int
+	timeouts []int
+}
+
+func (b *fakeBot) GetUpdatesWithTimeout(ctx context.Context, offset int64, timeout int) ([]telegram.Update, error) {
+	b.timeouts = append(b.timeouts, timeout)
+	return b.GetUpdates(ctx, offset)
 }
 
 func (b *fakeBot) GetMe(context.Context) (telegram.User, error) {
@@ -31,8 +37,31 @@ func TestPairAcceptsOnlyNewPrivateStart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if identity.UserID != 8 || identity.ChatID != 7 || identity.Username != "alice" {
+	if identity.UserID != 8 || identity.ChatID != 7 || identity.Username != "alice" || identity.UpdateOffset != 7 {
 		t.Fatalf("identity=%+v", identity)
+	}
+}
+
+func TestPairReportsBotBeforeWaitingForStart(t *testing.T) {
+	want := telegram.Update{UpdateID: 1, Message: &telegram.Message{Text: "/start", Chat: telegram.Chat{ID: 7, Type: "private"}, From: telegram.User{ID: 8}}}
+	bot := &fakeBot{batches: [][]telegram.Update{{}, {want}}}
+	ready := ""
+	_, err := PairWithReady(context.Background(), bot, func(identity BotIdentity) {
+		ready = identity.Username
+	}, func(BotIdentity, Identity) (bool, error) {
+		if ready == "" {
+			t.Fatal("ready callback must run before confirmation")
+		}
+		return true, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ready != "bridge_bot" {
+		t.Fatalf("ready=%q", ready)
+	}
+	if len(bot.timeouts) == 0 || bot.timeouts[0] != 0 {
+		t.Fatalf("baseline timeouts=%v", bot.timeouts)
 	}
 }
 

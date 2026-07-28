@@ -80,6 +80,10 @@ func NewClient(baseURL, token string, httpClient *http.Client) *Client {
 }
 
 func (c *Client) GetUpdates(ctx context.Context, offset int64) ([]Update, error) {
+	return c.GetUpdatesWithTimeout(ctx, offset, int(c.defaultGet().Seconds()))
+}
+
+func (c *Client) GetUpdatesWithTimeout(ctx context.Context, offset int64, timeout int) ([]Update, error) {
 	request := struct {
 		Offset         int64    `json:"offset"`
 		Limit          int      `json:"limit"`
@@ -88,7 +92,7 @@ func (c *Client) GetUpdates(ctx context.Context, offset int64) ([]Update, error)
 	}{
 		Offset:         offset,
 		Limit:          100,
-		Timeout:        int(c.defaultGet().Seconds()),
+		Timeout:        timeout,
 		AllowedUpdates: []string{"message", "callback_query"},
 	}
 

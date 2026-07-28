@@ -37,3 +37,23 @@ func TestCopyExecutableRefusesDifferentExistingFile(t *testing.T) {
 		t.Fatal("expected overwrite refusal")
 	}
 }
+
+func TestPreferredExecutableUsesInstalledCopy(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("LOCALAPPDATA", root)
+	t.Setenv("XDG_BIN_HOME", root)
+	target, err := Target()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("installed"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	fallback := filepath.Join(t.TempDir(), "download", executableName())
+	if got := PreferredExecutable(fallback); got != target {
+		t.Fatalf("PreferredExecutable() = %q, want %q", got, target)
+	}
+}

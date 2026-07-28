@@ -108,6 +108,8 @@ func runSetup([]string) error {
 			}
 			if err := install.AddToUserPath(filepath.Dir(target)); err != nil {
 				fmt.Fprintf(os.Stderr, "PATH update failed: %v\nAdd manually: %s\n", err, filepath.Dir(target))
+			} else {
+				fmt.Fprintln(os.Stdout, "codex-tg was installed for the current user. Restart your terminal to use it from PATH.")
 			}
 		}
 		progress.CommandLineComplete = true
@@ -130,8 +132,11 @@ func runSetup([]string) error {
 		}
 		bot := telegram.NewClient("https://api.telegram.org/bot"+token, token, nil)
 		for {
+			fmt.Fprintln(os.Stdout, "Validating token and preparing Telegram pairing...")
 			pairCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-			identity, pairErr := pairing.Pair(pairCtx, bot, func(bot pairing.BotIdentity, sender pairing.Identity) (bool, error) {
+			identity, pairErr := pairing.PairWithReady(pairCtx, bot, func(bot pairing.BotIdentity) {
+				fmt.Fprintf(os.Stdout, "Token validated. Open @%s in Telegram and send /start.\n", bot.Username)
+			}, func(bot pairing.BotIdentity, sender pairing.Identity) (bool, error) {
 				return yes(fmt.Sprintf("Bind @%s to Telegram @%s (user %d, chat %d)? [y/N]: ", bot.Username, sender.Username, sender.UserID, sender.ChatID), false)
 			})
 			cancel()
@@ -160,6 +165,17 @@ func runSetup([]string) error {
 			if err := config.Save(app.ConfigPath(), cfg); err != nil {
 				return err
 			}
+			pairingStore, err := state.Open(context.Background(), app.DataPath())
+			if err != nil {
+				return fmt.Errorf("open state for Telegram pairing: %w", err)
+			}
+			if err := pairingStore.SaveUpdateOffset(context.Background(), identity.UpdateOffset); err != nil {
+				_ = pairingStore.Close()
+				return err
+			}
+			if err := pairingStore.Close(); err != nil {
+				return err
+			}
 			progress.TelegramComplete = true
 			if err := checkpoint(); err != nil {
 				return err
@@ -178,6 +194,7 @@ func runSetup([]string) error {
 			if err != nil {
 				return err
 			}
+			executable = install.PreferredExecutable(executable)
 			scheduler := autostart.Scheduler{Executable: executable, WorkDir: filepath.Dir(app.ConfigPath())}
 			if err := scheduler.Install(context.Background()); err != nil {
 				fmt.Fprintf(os.Stderr, "Autostart failed: %v\nUse `codex-tg serve` for foreground mode.\n", err)
@@ -355,6 +372,12 @@ func runServe([]string) error {
 		}
 		return nil
 	})
+	service.ConfigureProjectRegistration(func(ctx context.Context, project ipc.ProjectRequest) error {
+		if coordinator == nil {
+			return errors.New("service initializing")
+		}
+		return coordinator.AddProject(ctx, models.Project{Name: project.Name, Path: project.Path, Enabled: project.Enabled})
+	})
 	if err := service.Start(ctx); err != nil {
 		return err
 	}
@@ -518,6 +541,13 @@ func runPrimaryFlow() error {
 	if added {
 		if err := config.Save(app.ConfigPath(), cfg); err != nil {
 			return err
+		}
+		runtime, err := loadOpenRuntime()
+		if err != nil {
+			return err
+		}
+		if err := ipc.NewClient(runtime.IPCURL, runtime.IPCToken).RegisterProject(context.Background(), ipc.ProjectRequest{Name: project.Name, Path: project.Path, Enabled: project.Enabled}); err != nil {
+			return fmt.Errorf("register project with running service: %w", err)
 		}
 	} else {
 		found := false
