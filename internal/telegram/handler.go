@@ -970,10 +970,10 @@ func isHighRiskApproval(kind, summary, requestText string) bool {
 		}
 	}
 
-	return strings.Contains(haystack, "C:\\") ||
-		strings.Contains(haystack, "D:\\") ||
-		strings.Contains(haystack, "E:\\") ||
-		strings.Contains(haystack, "F:\\")
+	return strings.Contains(haystack, "c:\\") ||
+		strings.Contains(haystack, "d:\\") ||
+		strings.Contains(haystack, "e:\\") ||
+		strings.Contains(haystack, "f:\\")
 }
 
 func parseCommand(text, botName string) (string, []string, bool, bool) {

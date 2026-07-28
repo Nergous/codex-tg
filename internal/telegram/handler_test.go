@@ -878,6 +878,27 @@ func TestOnEventHighRiskApprovalOffersNoApprove(t *testing.T) {
 	}
 }
 
+func TestOnEventWindowsPathApprovalOffersNoApprove(t *testing.T) {
+	t.Parallel()
+	service := &fakeApprovalService{nextNonce: "nonce-windows-path"}
+	responder := &fakeApprovalResponder{}
+	handler, _, messenger, _ := newFixtureWithApprovals(t, 100, 200, service, responder)
+
+	handler.bindRenderer(200, "thr-1")
+
+	if err := handler.OnEvent(context.Background(), approvalRequestEventWithKind("thr-1", "turn-1", json.RawMessage(`"srv-path"`), "command", `C:\Windows\System32\whoami.exe`, "")); err != nil {
+		t.Fatal(err)
+	}
+
+	send := messenger.lastSend()
+	if send.keyboard == nil || len(send.keyboard.InlineKeyboard) != 1 || len(send.keyboard.InlineKeyboard[0]) != 2 {
+		t.Fatalf("approval keyboard = %#v", send.keyboard)
+	}
+	if send.keyboard.InlineKeyboard[0][0].Text != "Deny" || send.keyboard.InlineKeyboard[0][1].Text != "Cancel" {
+		t.Fatalf("unexpected Windows path approval buttons: %#v", send.keyboard.InlineKeyboard[0])
+	}
+}
+
 func TestOnEventRejectsUnsupportedApprovalKind(t *testing.T) {
 	t.Parallel()
 	service := &fakeApprovalService{nextNonce: "nonce-unsupported"}
