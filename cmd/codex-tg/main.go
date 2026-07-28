@@ -99,7 +99,7 @@ func runSetup([]string) error {
 	}
 	cfg := &config.Config{Telegram: config.TelegramConfig{AllowedUserID: userID, AllowedChatID: chatID}, AppServer: config.AppServerConfig{Listen: listen, CodexBinary: binary}, Projects: []models.Project{{Name: name, Path: projectPath}}}
 	bot := telegram.NewClient("https://api.telegram.org/bot"+token, token, nil)
-	return app.Setup(context.Background(), bot, secrets.NewWindowsStore(), []byte(token), app.ConfigPath(), cfg)
+	return app.Setup(context.Background(), bot, secrets.NewSystemStore(), []byte(token), app.ConfigPath(), cfg)
 }
 
 func runStatus([]string) error {
@@ -198,7 +198,7 @@ func runServe([]string) error {
 			return err
 		}
 	}
-	secretsStore := secrets.NewWindowsStore()
+	secretsStore := secrets.NewSystemStore()
 	token, err := secretsStore.Get(ctx, secrets.TelegramBotToken)
 	if err != nil {
 		return err

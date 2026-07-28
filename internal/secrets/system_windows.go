@@ -56,6 +56,10 @@ func NewWindowsStore() *WindowsStore {
 	return &WindowsStore{backend: nativeBackend{}}
 }
 
+func NewSystemStore() Store {
+	return NewWindowsStore()
+}
+
 func (s *WindowsStore) Get(ctx context.Context, name string) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

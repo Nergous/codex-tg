@@ -74,6 +74,15 @@ tasks:
       - mkdir -p "{{.BUILD_DIR}}"
       - go build -trimpath -o "{{.BINARY}}" ./cmd/codex-tg
 
+  build-linux:
+    desc: Build the Linux amd64 executable
+    env:
+      GOOS: linux
+      GOARCH: amd64
+    cmds:
+      - mkdir -p "{{.BUILD_DIR}}"
+      - go build -trimpath -o "{{.BUILD_DIR}}/codex-tg-linux-amd64" ./cmd/codex-tg
+
   check:
     desc: Run fast local verification
     cmds:

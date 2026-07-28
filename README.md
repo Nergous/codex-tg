@@ -1,6 +1,6 @@
 # codex-tg
 
-`codex-tg` is a Windows-first Go bridge between a local Codex TUI session and
+`codex-tg` is a Windows and Linux Go bridge between a local Codex TUI session and
 an authorized Telegram private chat. Its goal is to let one operator continue
 the same Codex thread from either interface without exposing Codex App Server
 to the network.
@@ -27,7 +27,8 @@ The planned implementation follows these constraints:
 
 - App Server and local control endpoints bind only to `127.0.0.1`.
 - Telegram updates must match both the configured user ID and private chat ID.
-- The Telegram bot token is stored in Windows Credential Manager, never in the
+- The Telegram bot token is stored in Windows Credential Manager or the Linux
+  Secret Service, never in the
   repository, configuration file, database, logs, or process arguments.
 - Codex may operate only inside explicitly allow-listed canonical project
   paths.
@@ -41,12 +42,14 @@ See [SECURITY.md](SECURITY.md) for vulnerability reporting.
 
 ## Requirements
 
-- Windows 11 amd64 as the primary target.
+- Windows 11 amd64 or Linux amd64 with a systemd user session.
 - Go 1.26.4, as declared by `go.mod`.
 - A compatible Codex CLI installation with App Server and remote thread
   support.
 - [Task](https://taskfile.dev/) for development automation.
 - `govulncheck` for dependency vulnerability checks.
+- On Linux, `secret-tool` (`libsecret-tools` on Debian/Ubuntu) and an unlocked
+  Secret Service-compatible keyring.
 
 Install the development tools:
 
@@ -54,6 +57,16 @@ Install the development tools:
 go install github.com/go-task/task/v3/cmd/task@latest
 go install golang.org/x/vuln/cmd/govulncheck@latest
 ```
+
+Install the Linux credential helper on Debian or Ubuntu:
+
+```bash
+sudo apt install libsecret-tools
+```
+
+The desktop session must provide an unlocked Secret Service-compatible
+keyring. Linux autostart uses the current user's systemd manager; it never
+installs a root service.
 
 ## Configuration
 
@@ -92,19 +105,22 @@ codex-tg autostart install|remove|status
 ```
 
 Run `codex-tg setup` locally first. It validates the Telegram bot, stores its
-token in Windows Credential Manager, and writes non-secret config under
-`%LOCALAPPDATA%\codex-tg\config.json`.
+token in the system credential store, and writes non-secret config under
+`%LOCALAPPDATA%\codex-tg\config.json` on Windows or
+`$XDG_CONFIG_HOME/codex-tg/config.json` on Linux (normally
+`~/.config/codex-tg/config.json`).
 
 Start the bridge with `codex-tg serve`, then use `codex-tg open [--new] <path>`
 to attach the TUI to the exact service-owned thread. Use `project list`,
 `project add <name> <path>`, and `project remove <name>` to maintain the
-allow-list. `autostart install` creates a per-user Windows logon task.
+allow-list. `autostart install` creates a per-user Windows logon task or Linux
+systemd user service.
 
 Telegram commands: `/status`, `/projects`, `/project`, `/new`, `/resume`,
 `/sessions`, `/diff`, `/cancel`, `/queue`, `/lock`, and `/unlock`.
 
 To uninstall, run `codex-tg autostart remove`, stop the service, then remove
-`%LOCALAPPDATA%\codex-tg` and the `codex-tg/telegram-bot-token` credential.
+the platform config directory and the `codex-tg/telegram-bot-token` credential.
 
 ## Development
 
@@ -127,6 +143,7 @@ Common commands:
 | `task vet` | Run `go vet` |
 | `task vuln` | Run `govulncheck` |
 | `task build` | Build the Windows executable |
+| `task build-linux` | Build the Linux amd64 executable |
 | `task check` | Run formatting, vet, tests, and build checks |
 | `task validate` | Run `check`, race tests, and vulnerability checks |
 | `task version` | Print the version derived from Git |

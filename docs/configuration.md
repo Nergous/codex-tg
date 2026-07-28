@@ -1,8 +1,9 @@
 # Configuration and recovery
 
 `codex-tg setup` stores the Telegram token only in Windows Credential Manager
-under `codex-tg/telegram-bot-token`. It writes the following non-secret file:
-`%LOCALAPPDATA%\codex-tg\config.json`.
+or the Linux Secret Service under `codex-tg/telegram-bot-token`. It writes the
+non-secret configuration to `%LOCALAPPDATA%\codex-tg\config.json` on Windows
+or `$XDG_CONFIG_HOME/codex-tg/config.json` on Linux.
 
 ```json
 {
@@ -15,7 +16,7 @@ under `codex-tg/telegram-bot-token`. It writes the following non-secret file:
 All listeners are loopback-only. Project paths must be existing canonical
 directories in this allow-list; Telegram never accepts arbitrary paths.
 
-The SQLite state database is `%LOCALAPPDATA%\codex-tg\state.db`. Back it up
+The SQLite state database is stored beside `config.json` as `state.db`. Back it up
 only while the bridge is stopped. On restart, active turns become `faulted`;
 queued prompts remain paused and are never replayed automatically. Use
 `/resume` after reviewing status.
@@ -27,7 +28,7 @@ fails, update Codex and restart; the bridge fails closed.
 Troubleshooting: confirm `codex --version`, use `codex-tg status` with the
 local IPC environment variables, verify the configured user/chat IDs, and
 ensure no webhook remains on the bot. `autostart status` checks the per-user
-`CodexTgBridge` scheduled task.
+`CodexTgBridge` scheduled task or `codex-tg.service` systemd user unit.
 
 ## Safe manual acceptance test
 

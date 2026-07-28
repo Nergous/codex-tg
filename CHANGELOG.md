@@ -7,8 +7,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-07-28
+
 ### Added
 
+- Linux amd64 support with Secret Service credential storage and systemd user
+  autostart.
 - Windows-first Go CLI skeleton for the Codex Telegram bridge.
 - Strict JSON configuration loading and validation for Telegram access, the
   loopback Codex App Server, and allow-listed project directories.
