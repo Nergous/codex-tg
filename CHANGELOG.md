@@ -15,6 +15,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   are available. `/new <workspace>` without a prompt asks for it the same way.
 - The first prompt of a session started from Telegram is echoed at the top of
   its new topic.
+- `/sessions` shows recent sessions as buttons: a session with a topic links
+  to it, and a session without one gets a button that creates (or reopens)
+  its topic and posts the link, so any DSH session can be continued from
+  Telegram.
 
 ## [0.2.0] - 2026-10-22
 
