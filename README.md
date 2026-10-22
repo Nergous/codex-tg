@@ -78,10 +78,11 @@ second bot.
 
 - Every root session, new or old. By default the topic is created on the
   session's first message or turn after the plugin is running, so an older
-  session gets its topic the next time you continue it. Set **Create topic**
-  to "As soon as a session opens" to create it when the session is opened, or
-  to "Never automatically" to create topics only with `/new` in General
-  (existing topics keep working).
+  session gets its topic the next time you continue it in DSH, or right away
+  from `/sessions` in General. Set **Create topic** to "As soon as a session
+  opens" to create it when the session is opened, or to "Never automatically"
+  to create topics only with `/new` and `/sessions` in General (existing
+  topics keep working).
 - The topic starts with the status card; earlier history is not copied.
 - If a topic is deleted in Telegram, the next message creates a new one. A
   closed topic is reopened when the session needs it.
@@ -124,7 +125,7 @@ session as a message.
 
 | Command | What it does |
 |---|---|
-| `/sessions` | Recent sessions, with links to those that have a topic. |
+| `/sessions` | Recent DSH sessions as buttons. 🧵 opens the session's topic; ➕ creates (or reopens) it and posts the link, so you can continue any session from Telegram. |
 | `/workspaces` | Known DSH workspaces. |
 | `/new` | Pick a workspace from buttons, then send the first message (text, photo, file or voice) or start without one. The session's topic opens with your message. |
 | `/new <workspace> [prompt]` | Start directly in a workspace (by name or path). Without a prompt the bot asks for the first message. |
@@ -184,8 +185,8 @@ transcription command such as whisper.cpp.
 
 - Topics are not backfilled: a topic shows the session from the moment it was
   created.
-- A topic cannot be created for an old session from Telegram; continue the
-  session in DSH once, or set **Create topic** to "As soon as a session opens".
+- `/sessions` lists the 15 most recent sessions; older ones get a topic when
+  you continue them in DSH.
 - `/model` uses DSH's model switch, which also changes the default model for
   new sessions.
 - DSH has no session-deleted event, so deleting a session leaves its topic;

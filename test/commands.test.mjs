@@ -130,14 +130,57 @@ test('slash text DSH does not know is passed to the session as a message', async
   assert.equal(send.input.text, '/whatever finish the migration')
 })
 
-test('General: /help, /sessions with topic links, /workspaces', async (t) => {
+test('General: /help and /workspaces', async (t) => {
   const env = await env0(t)
   await env.bridge.handleUpdate(generalMessage('/help'))
   assert.match(lastText(env), /\/sessions/)
-  await env.bridge.handleUpdate(generalMessage('/sessions'))
-  assert.match(lastText(env), /<a href="https:\/\/t\.me\/c\/1234567890\/300">Fix login<\/a>/)
   await env.bridge.handleUpdate(generalMessage('/workspaces'))
   assert.match(lastText(env), /codex-tg.*\/home\/u\/codex-tg/)
+})
+
+test('General: /sessions links sessions with a topic and creates a topic for one without', async (t) => {
+  const env = await env0(t)
+  env.host.sessions.set('session-old', { cwd: '/home/u/codex-tg', workspaceTitle: 'codex-tg', title: 'Old refactor' })
+  await env.bridge.handleUpdate(generalMessage('/sessions'))
+  const list = env.tg.callsOf('sendMessage').at(-1)
+  assert.match(list.params.text, /Recent sessions/)
+  const rows = list.params.reply_markup.inline_keyboard.map((row) => row[0])
+  const linked = rows.find((b) => /Fix login/.test(b.text))
+  assert.equal(linked.url, 'https://t.me/c/1234567890/300', 'a session with a topic opens it directly')
+  assert.match(linked.text, /^🧵 Fix login · codex-tg/)
+  const missing = rows.find((b) => /Old refactor/.test(b.text))
+  assert.equal(missing.url, undefined)
+  assert.match(missing.text, /^➕ /)
+
+  await env.bridge.handleUpdate(press(missing.callback_data, OWNER, 'cb-open'))
+  await settle(env)
+  assert.equal(env.tg.callsOf('createForumTopic').length, 1)
+  const record = env.store.topic('session-old')
+  assert.ok(record, 'the old session now has a topic')
+  assert.match(env.tg.callsOf('createForumTopic')[0].params.name, /Old refactor/)
+  const link = `https://t.me/c/1234567890/${record.threadId}`
+  assert.ok(env.tg.callsOf('sendMessage').some((call) => call.params.message_thread_id === undefined && call.params.text.includes(`<a href="${link}">Open topic</a>`)), 'the link is posted in General')
+  assert.match(env.tg.callsOf('answerCallbackQuery').find((call) => call.params.callback_query_id === 'cb-open').params.text, /Topic ready/)
+  const updated = env.tg.callsOf('editMessageReplyMarkup').at(-1).params.reply_markup.inline_keyboard.map((row) => row[0])
+  assert.equal(updated.find((b) => /Old refactor/.test(b.text)).url, link, 'the button turns into a link')
+
+  // Pressing again (stale keyboard) reuses the topic.
+  await env.bridge.handleUpdate(press(missing.callback_data))
+  await settle(env)
+  assert.equal(env.tg.callsOf('createForumTopic').length, 1)
+})
+
+test('General: /sessions reopens a closed topic instead of linking to it', async (t) => {
+  const env = await env0(t)
+  await env.store.patchTopic('session-a', { closed: true })
+  await env.bridge.handleUpdate(generalMessage('/sessions'))
+  const button = env.tg.callsOf('sendMessage').at(-1).params.reply_markup.inline_keyboard[0][0]
+  assert.equal(button.url, undefined)
+  await env.bridge.handleUpdate(press(button.callback_data))
+  await settle(env)
+  assert.equal(env.tg.callsOf('reopenForumTopic').length, 1)
+  assert.equal(env.tg.callsOf('createForumTopic').length, 0)
+  assert.equal(env.store.topic('session-a').closed, false)
 })
 
 test('General: /new starts a session in a workspace with a first prompt and opens its topic', async (t) => {
