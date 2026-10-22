@@ -1,0 +1,13 @@
+- insert:
+    - id: telegram-bridge
+      name: '@nergous/dsh-telegram-bridge'
+      config:
+        # Set everything up in Plugins → Telegram bridge. The bot token lives in
+        # DSH credentials under `tokenRef`, never in this file.
+        tokenRef: DSH_TELEGRAM_BOT_TOKEN
+        # Forum supergroup id; filled by /bind from the settings page.
+        chatId: 0
+        # Telegram user ids allowed to talk to sessions; /bind adds you.
+        allowedUserIds: []
+        # Output detail in topics: full | tools (collapsed tool calls) | final.
+        verbosity: tools
