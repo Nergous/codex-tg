@@ -12,8 +12,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Changed
 
 - Rewrite the project as a DeepSeek Harness (DSH) plugin. The Go bridge for
-  the Codex App Server is removed; its last version stays on the
-  `archive/go-bridge` branch and the `v0.1.5` tag.
+  the Codex App Server is removed; its last version stays at the
+  `v0.1.5` tag.
 
 ### Added
 
