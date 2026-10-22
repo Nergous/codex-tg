@@ -1,0 +1,1 @@
+{ "meta": { "title": "Telegram bridge", "description": "Every DSH session gets its own topic in a Telegram forum group: messages and agent output mirrored both ways, approvals and questions with buttons, commands, files and voice. Subagents never create topics." } }

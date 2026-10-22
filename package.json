@@ -1,0 +1,66 @@
+{
+  "name": "@nergous/dsh-telegram-bridge",
+  "version": "0.2.0",
+  "description": "DeepSeek Harness plugin: every DSH session becomes a Telegram forum topic, mirrored both ways, with approvals, questions, commands, files and voice",
+  "license": "MIT",
+  "author": "Nergous",
+  "homepage": "https://github.com/Nergous/codex-tg#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Nergous/codex-tg.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Nergous/codex-tg/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "type": "module",
+  "icon": "./icon.svg",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "lib/**/*.js",
+    "cordis.patch.yml",
+    "icon.svg",
+    "locale/*.json",
+    "README.md",
+    "README.ru.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test 'test/*.test.mjs'",
+    "check": "node scripts/check-repo.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-api-remotes",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-plugin-manager"
+      ]
+    }
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "telegram",
+    "telegram-bot",
+    "forum-topics"
+  ]
+}

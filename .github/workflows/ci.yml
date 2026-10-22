@@ -15,120 +15,69 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Job names are required status checks on main; keep them stable.
 jobs:
   quality:
     name: Quality and tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
-
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
         with:
-          go-version-file: go.mod
-          cache: true
-          cache-dependency-path: go.sum
+          node-version: 22
 
-      - name: Verify dependencies
-        run: |
-          go mod download
-          go mod verify
-          go mod tidy
-          git diff --exit-code -- go.mod go.sum
+      - name: Repository check and tests (Node 22)
+        run: node scripts/check-repo.mjs
 
-      - name: Check formatting
-        shell: bash
-        run: |
-          unformatted="$(gofmt -l .)"
-          if [[ -n "${unformatted}" ]]; then
-            printf 'Unformatted Go files:\n%s\n' "${unformatted}"
-            exit 1
-          fi
-
-      - name: Vet
-        run: go vet ./...
-
-      - name: Test with race detector and coverage
-        run: |
-          mkdir -p .artifacts/coverage
-          go test \
-            -race \
-            -count=1 \
-            -covermode=atomic \
-            -coverprofile=.artifacts/coverage/coverage.out \
-            ./...
-          go tool cover \
-            -func=.artifacts/coverage/coverage.out
-          go tool cover \
-            -html=.artifacts/coverage/coverage.out \
-            -o .artifacts/coverage/coverage.html
-
-      - name: Upload coverage
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - name: Set up Node.js 24
+        uses: actions/setup-node@v4
         with:
-          name: coverage
-          path: |
-            .artifacts/coverage/coverage.out
-            .artifacts/coverage/coverage.html
-          include-hidden-files: true
-          if-no-files-found: error
-          retention-days: 14
+          node-version: 24
+
+      - name: Repository check and tests (Node 24)
+        run: node scripts/check-repo.mjs
 
   windows:
     name: Windows build
     runs-on: windows-latest
     timeout-minutes: 15
-
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
-          go-version-file: go.mod
-          cache: true
-          cache-dependency-path: go.sum
+          node-version: 24
 
-      - name: Verify dependencies
-        run: |
-          go mod download
-          go mod verify
+      - name: Repository check and tests
+        run: node scripts/check-repo.mjs
 
-      - name: Test
-        run: go test -count=1 ./...
-
-      - name: Build
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force .artifacts/bin | Out-Null
-          go build `
-            -trimpath `
-            -o .artifacts/bin/codex-tg.exe `
-            ./cmd/codex-tg
-
-      - name: Upload Windows binary
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: codex-tg-windows-amd64
-          path: .artifacts/bin/codex-tg.exe
-          include-hidden-files: true
-          if-no-files-found: error
-          retention-days: 7
+      - name: Pack
+        run: npm pack --dry-run
 
   vulnerability:
     name: Vulnerability scan
     runs-on: ubuntu-latest
     timeout-minutes: 10
-
     steps:
-      - name: Run govulncheck
-        uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
-          go-package: ./...
-          output-format: text
+          node-version: 24
+
+      - name: Resolve dependency tree
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+
+      - name: npm audit
+        run: npm audit --audit-level=low

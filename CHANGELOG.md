@@ -7,6 +7,37 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-22
+
+### Changed
+
+- Rewrite the project as a DeepSeek Harness (DSH) plugin. The Go bridge for
+  the Codex App Server is removed; its last version stays at the
+  `v0.1.5` tag.
+
+### Added
+
+- One Telegram forum topic per root DSH session, named
+  `workspace · session title`, renamed when the title changes, closed on
+  archive and reopened on restore. Subagents never create topics.
+- Two-way mirroring: messages typed in DSH and agent output appear in the
+  topic; text written in the topic is sent to the session through the same
+  path as the DSH composer (queue, or steer with the `!` prefix).
+- Live streaming of answers, collapsed tool-call blocks, one status line per
+  subagent, turn-end notifications, delivery reactions, and a pinned status
+  card per topic.
+- Approvals and `ask_user_question` prompts with inline buttons that race the
+  DSH GUI; the side that answers second is withdrawn.
+- Topic commands `/stop`, `/status`, `/diff`, `/compact`, `/model`,
+  `/verbosity`, `/mute`, `/unmute`, `/steer`, and General commands
+  `/sessions`, `/workspaces`, `/new`.
+- Photos, documents, and voice messages from Telegram as session input, with
+  transcription through DSH speech-to-text or a configured command; files the
+  agent presents are sent to the topic.
+- Settings page in Plugins with token storage in DSH credentials, connection
+  test, and `/bind` pairing of the forum group; a composer link to the
+  session's topic.
+
 ## [0.1.5] - 2026-07-28
 
 ### Added

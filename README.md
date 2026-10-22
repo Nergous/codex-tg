@@ -1,254 +1,242 @@
-# codex-tg
+# DSH Telegram bridge
 
-`codex-tg` is a Windows and Linux Go bridge between a local Codex TUI session and
-an authorized Telegram private chat. Its goal is to let one operator continue
-the same Codex thread from either interface without exposing Codex App Server
-to the network.
+English | [Русский](README.ru.md)
 
-Version `v0.1.5` provides the complete single-operator bridge lifecycle:
-setup, supervised App Server startup, Telegram polling, shared threads, queued
-prompts, approvals, recovery, local TUI attachment, and per-user autostart. It
-is considered beta while the upstream Codex App Server protocol remains
-experimental.
+A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH)
+plugin that gives every DSH session its own topic in a Telegram forum group.
+You can follow and drive a session from DSH or from Telegram; both sides see
+the same conversation.
 
-> [!WARNING]
-> This project uses experimental Codex App Server protocol. Use it only with
-> an allow-listed disposable or trusted local workspace.
-
-## Architecture
-
-One `codex-tg serve` process:
-
-1. Start `codex app-server` on an authenticated loopback WebSocket.
-2. Poll Telegram for messages from one configured user and private chat.
-3. Coordinate projects, Codex threads, turns, and approvals.
-4. Persist non-secret state in SQLite.
-
-`codex-tg` asks the service to start or resume the current directory and
-then launch the local Codex TUI on that exact thread.
-
-## Security model
-
-The implementation enforces these constraints:
-
-- App Server and local control endpoints bind only to `127.0.0.1`.
-- Telegram updates must match both the configured user ID and private chat ID.
-- The Telegram bot token is stored in Windows Credential Manager or the Linux
-  Secret Service, never in the repository, configuration file, database, logs,
-  or process arguments.
-- Codex may operate only inside explicitly allow-listed canonical project
-  paths.
-- Threads use the `workspace-write` sandbox and `on-request` approvals.
-- Commit, push, migration, destructive, credential, and production-like
-  operations require explicit approval.
-- Tests must use temporary repositories, fakes, and test databases. They must
-  never access a production database, Telegram chat, or service.
-
-See [SECURITY.md](SECURITY.md) for vulnerability reporting.
+- **One session, one topic.** Each root session gets a topic named
+  `workspace · session title`. It is renamed when DSH titles the session,
+  closed when you archive it, and reopened when you restore it.
+- **Both directions.** Messages you type in DSH appear in the topic. Text,
+  photos, files and voice messages you send in the topic go into the session
+  exactly like a message typed in the DSH composer.
+- **Agent output.** Answers stream live into one message that is edited as the
+  model writes. Tool calls are collapsed into one expandable block per run of
+  tools. While the agent works the topic shows "typing…"; when a turn ends, a
+  notifying `✅ Done` line arrives.
+- **Subagents.** Subagents never create topics. Each one shows as a single
+  line in its parent's topic: "working, waiting for result ⏳", then
+  "done ✅" (or failed ❌ / cancelled ⏹).
+- **Approvals and questions.** Approval requests and `ask_user_question`
+  prompts arrive with inline buttons. Telegram and the DSH GUI race: whichever
+  answers first wins, and the prompt on the other side is withdrawn.
+- **Commands.** `/stop`, `/status`, `/diff`, `/compact`, `/model` and more in
+  a session topic; `/sessions`, `/workspaces` and `/new` in General. Other DSH
+  slash commands work too.
+- **Pinned status card.** The first message of each topic (workspace, path,
+  session id, model) is pinned.
+- **Settings page and composer link.** Everything is configured on the
+  plugin's page in DSH. The DSH composer shows a **Telegram** link that opens
+  the current session's topic.
 
 ## Requirements
 
-- Windows 11 amd64 or Linux amd64 with a systemd user session.
-- Go 1.26.4, as declared by `go.mod`.
-- A compatible Codex CLI installation with App Server and remote thread
-  support.
-- [Task](https://taskfile.dev/) for development automation.
-- `govulncheck` for dependency vulnerability checks.
-- On Linux, `secret-tool` (`libsecret-tools` on Debian/Ubuntu) and an unlocked
-  Secret Service-compatible keyring.
+- DeepSeek Harness with the plugin manager (desktop app or `dsh web`).
+- Node.js 22 or newer (the one DSH runs on).
+- A Telegram bot from [@BotFather](https://t.me/BotFather).
+- A Telegram supergroup with **Topics** enabled.
+- Optional: `ffmpeg` for voice messages.
 
-Install the development tools:
+## Install
 
-```powershell
-go install github.com/go-task/task/v3/cmd/task@latest
-go install golang.org/x/vuln/cmd/govulncheck@latest
-```
+1. In DSH open **Plugins → Add plugin** and enter one of:
+   - `github:Nergous/codex-tg` (latest from GitHub), or
+   - an absolute path to a local clone, for example `/home/me/projects/codex-tg`.
+2. Choose **Enable now**, then open **Plugins → Telegram bridge**.
 
-Install the Linux credential helper on Debian or Ubuntu:
+The plugin has no build step and no dependencies. After changing host code
+(`index.js`, `lib/`) restart DSH; `client.js` reloads in the open page.
 
-```bash
-sudo apt install libsecret-tools
-```
+## Set up
 
-The desktop session must provide an unlocked Secret Service-compatible
-keyring. Linux autostart uses the current user's systemd manager; it never
-installs a root service.
+1. **Bot token.** Create a bot with @BotFather (`/newbot`), paste the token on
+   the settings page and press **Save token**. The token is stored in DSH
+   credentials (`DSH_TELEGRAM_BOT_TOKEN`), never in configuration files. An
+   environment variable of the same name also works.
+2. **Group.** Create a group, open its settings and enable **Topics**. Add
+   the bot and make it an administrator with **Manage topics** and
+   **Pin messages**.
+3. **Bind.** Press **Get bind code** and send `/bind <code>` in the group
+   within 10 minutes. The group is saved, and you are added to the allowed
+   users. Add more Telegram user ids on the settings page if others should be
+   able to write to sessions. Messages from anyone else, from bots and from
+   anonymous admins are ignored.
+4. Press **Test connection**. It checks the token, the group, Topics, and the
+   bot's rights.
+5. Write something in any DSH session. Its topic appears in the group.
 
-## Configuration
+Only one process may poll a bot. If DSH desktop and `dsh web` run at the same
+time with this plugin, Telegram answers `409 Conflict`; use one of them, or a
+second bot.
 
-GitHub Releases publish standalone Windows and Linux executables plus
-`checksums.txt`; documentation and license text remain in the repository.
-After downloading the Linux executable, mark it executable with `chmod +x`.
+## Using it
 
-Non-secret configuration uses JSON similar to:
+### Which sessions get a topic
 
-```json
-{
-  "telegram": {
-    "allowed_user_id": 123456789,
-    "allowed_chat_id": 123456789
-  },
-  "app_server": {
-    "listen": "127.0.0.1:4500",
-    "codex_binary": "C:\\Tools\\codex.exe"
-  },
-  "projects": [
-    {
-      "name": "example",
-      "path": "D:\\Projects\\example"
-    }
-  ]
-}
-```
+- Every root session, new or old. By default the topic is created on the
+  session's first message or turn after the plugin is running, so an older
+  session gets its topic the next time you continue it. Set **Create topic**
+  to "As soon as a session opens" to create it when the session is opened, or
+  to "Never automatically" to create topics only with `/new` in General
+  (existing topics keep working).
+- The topic starts with the status card; earlier history is not copied.
+- If a topic is deleted in Telegram, the next message creates a new one. A
+  closed topic is reopened when the session needs it.
+- Subagent sessions never get a topic.
 
-The Telegram bot token must not be placed in this file.
+### Talking to a session
 
-## Usage
+Write in a session's topic to talk to that session. Messages queue behind the
+running turn, as in DSH. Start a message with `!` to steer the running turn
+instead. While the agent waits for an answer to a question, your next text
+message answers it.
 
-### 1. Initial setup and daily use
+Photos are attached as images (when the model accepts images), documents as
+files (up to **Max download, MB**). Voice messages are transcribed and sent as
+text; the transcript is echoed in the topic. Without a transcriber the audio
+file is attached.
 
-Run the interactive setup once:
+Files the agent presents with the `present` tool are sent to the topic as
+documents.
 
-```console
-cd project
-codex-tg
-```
+### Topic commands
 
-On first run, the wizard optionally installs the executable for the current
-user, validates and pairs the Telegram bot from a new private `/start`, offers
-per-user autostart, confirms the current project, and writes non-secret state to
-`%LOCALAPPDATA%\codex-tg\config.json` on Windows or
-`$XDG_CONFIG_HOME/codex-tg/config.json` on Linux (normally
-`~/.config/codex-tg/config.json`).
+| Command | What it does |
+|---|---|
+| `/stop` | Stop the running turn (queued messages stay queued). |
+| `/status` | Workspace, state, model, context use, output mode. |
+| `/diff` | `git diff --stat` of the session's directory, full patch as a file. |
+| `/compact` | Compact the conversation (when the session is idle). |
+| `/model [name]` | Show models as buttons, or switch to one by name. |
+| `/verbosity full\|tools\|final` | Output detail for this topic only. |
+| `/mute`, `/unmute` | Pause or resume agent output in this topic. Approvals and questions still arrive. |
+| `/steer <text>` | Same as `!text`. |
+| `/help` | Command list. |
 
-Later runs confirm any new current directory, start an unavailable configured
-service, and open Codex. `codex-tg setup`, `serve`, `open`, `project`, `status`,
-and `autostart` remain available for recovery and scripting.
+Other DSH slash commands, such as `/goal` or `/permission`, run through the
+DSH command registry like in the composer. Unknown slash text is sent to the
+session as a message.
 
-### 2. Start the bridge manually
+### General topic commands
 
-```console
-codex-tg serve
-```
+| Command | What it does |
+|---|---|
+| `/sessions` | Recent sessions, with links to those that have a topic. |
+| `/workspaces` | Known DSH workspaces. |
+| `/new <workspace> [prompt]` | Start a new session in a workspace (by name or path), optionally with a first message, and link its topic. |
+| `/help` | Command list. |
 
-Keep this process running. It starts Codex App Server, Telegram polling, and the
-local IPC endpoint used by other `codex-tg` commands.
+## Settings
 
-### 3. Manage projects
+All settings live on the plugin's settings page and apply without a restart.
 
-Only configured projects can be opened from the CLI or selected in Telegram:
+**Output**
 
-```console
-codex-tg project list
-codex-tg project add codex-tg D:/Files/go/codex-tg
-codex-tg project remove codex-tg
-```
+| Setting | Default | Meaning |
+|---|---|---|
+| Output detail | tools collapsed | Everything with tools expanded, tools collapsed, or final answers only. `/verbosity` overrides it per topic. |
+| Stream answers live | on | Edit one message while the model writes. Off sends the answer when it is complete. |
+| Notify when a turn ends | on | `✅ Done` line with sound. Everything else is silent. |
+| Show "typing…" while working | on | Telegram typing indicator during a turn. |
+| Mirror my DSH messages | on | Show messages typed in DSH in the topic. |
+| Pinned status card per topic | on | Pin the topic's first message. |
 
-On Linux:
+**Topics**
 
-```console
-codex-tg project add codex-tg /home/user/projects/codex-tg
-```
+| Setting | Default | Meaning |
+|---|---|---|
+| Create topic | on first message | Or as soon as a session opens, or never automatically. |
+| When a session is archived | close the topic | Close, delete, or keep it open. Restoring the session reopens a closed topic. |
 
-When running from Git Bash, write Windows paths with forward slashes
-(`D:/Files/go/codex-tg`), use the MSYS form (`/d/Files/go/codex-tg`), or quote
-paths containing backslashes (`"D:\Files\go\codex-tg"`). Unquoted backslashes
-are consumed by the shell before `codex-tg` receives the path.
+**Interaction**
 
-### 4. Open Codex
+| Setting | Default | Meaning |
+|---|---|---|
+| Approvals with buttons | on | Off sends approval requests only to the DSH GUI. |
+| Agent questions with buttons | on | Off sends agent questions only to the DSH GUI. |
+| Send files the agent presents | on | Forward `present` files as documents. |
+| Steer prefix | `!` | Empty disables the prefix. |
+| Transcribe voice messages | on | Off attaches voice messages as audio files. |
+| Transcription command | empty | Shell command (POSIX `sh`); `{file}` is a 16 kHz mono WAV. Example: `whisper-cli -l ru -nt -f {file}`. Without it DSH speech-to-text is used when installed. |
+| Speech language (DSH STT) | empty | Language hint for DSH speech-to-text. |
 
-Run this in another terminal while `codex-tg serve` is active:
+**Advanced**
 
-```console
-codex-tg open
-codex-tg open --new D:/Files/go/codex-tg
-```
+| Setting | Default | Meaning |
+|---|---|---|
+| Bridge enabled | on | Off stops polling and mirroring. |
+| Stream edit interval, ms | 2500 | Minimum time between edits of a streaming message. |
+| Messages per minute | 20 | Telegram's limit for one group; all topics share it. |
+| Max download, MB | 20 | Largest file taken from Telegram (the Bot API limit is 20). |
+| ffmpeg path | `ffmpeg` | Used to decode voice messages. |
+| Bot API URL | `https://api.telegram.org` | For a self-hosted Bot API server. Must be `https`, or `http` on loopback. |
 
-Both commands launch an interactive Codex TUI connected to the bridge. The TUI
-creates its thread, then the service adopts it for the selected project so the
-same conversation can continue through Telegram. `--new` remains available for
-CLI compatibility and explicitly requests a fresh interactive session.
+DSH speech-to-text (`@deepseek-ai/dsh-experimental-voice-input-bundle`) is
+optional and does not recognize Russian; for Russian voice messages set a
+transcription command such as whisper.cpp.
 
-### 5. Telegram commands
+## Limitations
 
-- `/status` — show bridge and session state.
-- `/projects` and `/project` — list or select an allowed project.
-- `/new` and `/resume` — create or resume a thread.
-- `/sessions` — list recent persisted threads for the selected project.
-- `/diff` — show current changes.
-- `/cancel` — interrupt the active turn.
-- `/queue` — list prompts waiting behind the active turn.
-- `/lock` and `/unlock` — control the Telegram-side session lock.
+- Topics are not backfilled: a topic shows the session from the moment it was
+  created.
+- A topic cannot be created for an old session from Telegram; continue the
+  session in DSH once, or set **Create topic** to "As soon as a session opens".
+- `/model` uses DSH's model switch, which also changes the default model for
+  new sessions.
+- DSH has no session-deleted event, so deleting a session leaves its topic;
+  archiving closes it.
+- A question that timed out in Telegram can only be answered in DSH.
+- One bot per running DSH process (see `409 Conflict` above).
 
-### 6. Status and autostart
+## How it works
 
-```console
-codex-tg status
-codex-tg autostart install
-codex-tg autostart status
-codex-tg autostart remove
-```
+The plugin runs inside the DSH host process.
 
-Autostart uses a per-user Windows logon task or Linux systemd user service.
+- It listens to DSH session events (`session/event`, `agent/assistant-stream`,
+  `subagent/start`, `subagent/end`) and sends Telegram messages through one
+  rate-limited queue per group. Streaming edits are coalesced so a busy group
+  gets fewer, larger edits instead of a backlog. Messages that are not safe to
+  repeat are retried only when Telegram certainly did not receive them.
+- Input from Telegram goes through `sessionController.prompt`, the method the
+  DSH composer uses. A cold session is resumed with its preset and model.
+- Approvals and questions hook the `approval/request` and
+  `user-questions/request` waterfalls before the GUI and race both answers.
+  The DSH GUI shows the prompt at once; Telegram never delays it.
+- Root sessions are told apart from subagents by the session header
+  (`origin: 'subagent'`). Subagent approvals are shown in the root topic.
+- The session-to-topic map and the polling offset are stored in a DSH storage
+  domain (`~/.dsh/storages/telegram_bridge.json`).
 
-To uninstall, run `codex-tg autostart remove`, stop the service, then remove
-the platform config directory and the `codex-tg/telegram-bot-token` credential.
+## Security
+
+- Only the bound group and the allowed user ids are served. Everything else is
+  ignored, including button presses, bots and anonymous admins.
+- The bot token is kept in DSH credentials and never written to logs, errors,
+  configuration, or the storage domain. The settings routes cannot change the
+  credential name or the Bot API URL.
+- Settings routes use DSH's own authentication.
+- Anyone who can write in the group as an allowed user can run commands in
+  your sessions with the sessions' permissions. Keep the group private.
+
+See [SECURITY.md](SECURITY.md) to report a vulnerability.
 
 ## Development
 
-List available tasks:
-
-```powershell
-task --list
+```sh
+npm test                      # node --test, no dependencies
+node scripts/check-repo.mjs   # syntax, manifest consistency, full test suite
 ```
 
-Common commands:
+Tests use an in-process fake Telegram Bot API and fake DSH services; they
+never contact Telegram or a real DSH installation. CI runs the check on Linux
+(Node 22 and 24) and Windows, plus `npm audit`.
 
-| Command | Purpose |
-| --- | --- |
-| `task fmt` | Format Go source files |
-| `task fmt-check` | Fail when Go source is not formatted |
-| `task tidy` | Synchronize `go.mod` and `go.sum` |
-| `task test` | Run all tests once |
-| `task test-race` | Run all tests with the race detector |
-| `task coverage` | Generate text and HTML coverage reports |
-| `task vet` | Run `go vet` |
-| `task vuln` | Run `govulncheck` |
-| `task build` | Build the Windows executable |
-| `task build-linux` | Build the Linux amd64 executable |
-| `task check` | Run formatting, vet, tests, and build checks |
-| `task validate` | Run `check`, race tests, and vulnerability checks |
-| `task version` | Print the version derived from Git |
-| `task clean` | Remove generated `.artifacts` files |
-
-Coverage output is stored outside the repository root files:
-
-```text
-.artifacts/coverage/coverage.out
-.artifacts/coverage/coverage.html
-```
-
-## Versioning and releases
-
-User-visible changes are collected under `Unreleased` in
-[CHANGELOG.md](CHANGELOG.md). Release versions follow Semantic Versioning and
-are represented by annotated Git tags such as `v0.1.0`.
-
-Development builds use `git describe --tags --always --dirty`, so they remain
-identifiable before the first release. A separate `VERSION` file is not used
-because it would duplicate the Git tag and could become inconsistent.
-
-Release flow:
-
-1. Move relevant entries from `Unreleased` to a dated version section.
-2. Run `task validate`.
-3. Create a release commit.
-4. Create and push an annotated version tag.
-5. Let the release workflow build and publish artifacts.
-
-Builds made between release tags are development snapshots identified by their
-commit hash.
+The previous Go bridge for the Codex App Server is preserved at the `v0.1.5`
+tag.
 
 ## License
 
-Licensed under the [MIT License](LICENSE).
+[MIT](LICENSE)
