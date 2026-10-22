@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { test } from 'node:test'
 import { DEFAULTS, ROUTES, buildConfig, resolveConfig } from '../index.js'
 import { CHAT, OWNER, TOKEN, sleep, topicMessage } from './harness.mjs'
@@ -20,7 +20,7 @@ test('resolveConfig fills defaults, unwraps volatile refs, and sanitizes', () =>
 
 /** Real schemastery from an extracted DSH runtime, when available (DSH_NODE_MODULES or the local scratch copy). */
 async function loadRealSchemastery() {
-  const roots = [process.env.DSH_NODE_MODULES, join(dirname(new URL(import.meta.url).pathname), '..', '.scratch', 'x', 'dsh', 'node_modules')].filter(Boolean)
+  const roots = [process.env.DSH_NODE_MODULES, join(dirname(fileURLToPath(import.meta.url)), '..', '.scratch', 'x', 'dsh', 'node_modules')].filter(Boolean)
   for (const root of roots) {
     const entry = join(root, '@deepseek-ai', 'schemastery', 'lib', 'index.mjs')
     if (existsSync(entry)) {
