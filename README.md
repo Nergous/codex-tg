@@ -126,7 +126,9 @@ session as a message.
 |---|---|
 | `/sessions` | Recent sessions, with links to those that have a topic. |
 | `/workspaces` | Known DSH workspaces. |
-| `/new <workspace> [prompt]` | Start a new session in a workspace (by name or path), optionally with a first message, and link its topic. |
+| `/new` | Pick a workspace from buttons, then send the first message (text, photo, file or voice) or start without one. The session's topic opens with your message. |
+| `/new <workspace> [prompt]` | Start directly in a workspace (by name or path). Without a prompt the bot asks for the first message. |
+| `/cancel` | Stop a `/new` that is waiting for a choice or a message. |
 | `/help` | Command list. |
 
 ## Settings

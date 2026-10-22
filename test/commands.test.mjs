@@ -144,11 +144,112 @@ test('General: /new starts a session in a workspace with a first prompt and open
   const env = await env0(t)
   await env.bridge.handleUpdate(generalMessage('/new codex write a README'))
   const created = env.host.calls.find((call) => call.op === 'newSession')
-  assert.deepEqual(created, { op: 'newSession', path: '/home/u/codex-tg', first: { text: 'write a README' } })
-  await settle(env)
+  assert.deepEqual(created, { op: 'newSession', path: '/home/u/codex-tg', first: undefined })
+  const input = env.host.calls.find((call) => call.op === 'sendInput')
+  assert.equal(input.id, 'session-new')
+  assert.equal(input.input.text, 'write a README')
+  await settle(env, 'session-new')
   assert.equal(env.tg.callsOf('createForumTopic').length, 1)
-  assert.ok(env.store.topic('session-new'))
+  const thread = env.store.topic('session-new').threadId
+  assert.ok(env.tg.callsOf('sendMessage').some((call) => call.params.message_thread_id === thread && /You \(Telegram\)<\/b>\nwrite a README/.test(call.params.text)), 'the prompt is echoed in the new topic')
   assert.ok(env.tg.callsOf('sendMessage').some((call) => /Session started in <b>codex-tg<\/b>.*open topic/.test(call.params.text)))
+})
+
+const WORKSPACES = [
+  { id: 'ws1', title: 'codex-tg', path: '/home/u/codex-tg' },
+  { id: 'ws2', title: 'site', path: '/home/u/site' },
+  { id: 'ws3', title: 'infra', path: '/home/u/infra' },
+]
+
+function press(data, from = OWNER, id = `cb-${Math.random()}`) {
+  return { callback_query: { id, from: { id: from }, message: { message_id: 1, chat: { id: CHAT } }, data } }
+}
+
+const buttonsOf = (call) => (call.params.reply_markup?.inline_keyboard ?? []).flat()
+
+test('General: /new without arguments lists workspaces as buttons, then takes the next message as the prompt', async (t) => {
+  const env = await env0(t)
+  env.host.listWorkspaces = async () => WORKSPACES
+  await env.bridge.handleUpdate(generalMessage('/new'))
+  const picker = env.tg.callsOf('sendMessage').at(-1)
+  assert.match(picker.params.text, /Pick a workspace/)
+  const buttons = buttonsOf(picker)
+  assert.deepEqual(buttons.map((b) => b.text), ['codex-tg', 'site', 'infra', '✖ Cancel'])
+  assert.equal(env.host.calls.some((call) => call.op === 'newSession'), false, 'nothing starts before a choice')
+
+  await env.bridge.handleUpdate(press(buttons[1].callback_data))
+  await settle(env)
+  const edit = env.tg.callsOf('editMessageText').at(-1)
+  assert.match(edit.params.text, /New session in site/)
+  assert.match(edit.params.text, /Send the first message/)
+  assert.ok(buttonsOf(edit).some((b) => /Start without a message/.test(b.text)))
+
+  await env.bridge.handleUpdate(generalMessage('fix the footer'))
+  await settle(env, 'session-new')
+  assert.deepEqual(env.host.calls.find((call) => call.op === 'newSession'), { op: 'newSession', path: '/home/u/site', first: undefined })
+  const input = env.host.calls.find((call) => call.op === 'sendInput')
+  assert.equal(input.id, 'session-new')
+  assert.equal(input.input.text, 'fix the footer')
+  assert.match(env.tg.callsOf('editMessageText').at(-1).params.text, /Session started in <b>site<\/b>.*open topic/)
+  assert.equal(env.bridge.newFlows.size, 0)
+
+  // The flow is over: the next General text gets the usual hint.
+  await env.bridge.handleUpdate(generalMessage('hello again'))
+  assert.match(lastText(env), /Write inside a session topic/)
+})
+
+test('General: /new <workspace> without a prompt asks for the first message; a photo works as the prompt', async (t) => {
+  const env = await env0(t)
+  env.host.listWorkspaces = async () => WORKSPACES
+  await env.bridge.handleUpdate(generalMessage('/new infra'))
+  assert.match(lastText(env), /New session in infra/)
+  const photo = generalMessage('')
+  photo.message.photo = [{ file_id: 'small', file_size: 10 }, { file_id: 'big', file_size: 7 }]
+  photo.message.caption = 'what is wrong here?'
+  delete photo.message.text
+  env.tg.addFile('big', Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3]))
+  await env.bridge.handleUpdate(photo)
+  await settle(env, 'session-new')
+  const input = env.host.calls.find((call) => call.op === 'sendInput')
+  assert.equal(input.input.text, 'what is wrong here?')
+  assert.equal(input.input.attachments.length, 1)
+  const thread = env.store.topic('session-new').threadId
+  assert.ok(env.tg.callsOf('sendMessage').some((call) => call.params.message_thread_id === thread && /🖼 photo\nwhat is wrong here\?/.test(call.params.text)))
+})
+
+test('General: /new flow can start empty, go back, cancel, and ignores other users\' presses', async (t) => {
+  const env = await env0(t)
+  env.host.listWorkspaces = async () => WORKSPACES
+  env.settings.allowedUserIds = [OWNER, 888]
+  await env.bridge.handleUpdate(generalMessage('/new'))
+  let buttons = buttonsOf(env.tg.callsOf('sendMessage').at(-1))
+  await env.bridge.handleUpdate(press(buttons[0].callback_data, 888, 'cb-other'))
+  await settle(env)
+  assert.match(env.tg.callsOf('answerCallbackQuery').find((call) => call.params.callback_query_id === 'cb-other').params.text, /Only the person/)
+
+  await env.bridge.handleUpdate(press(buttons[0].callback_data))
+  await settle(env)
+  buttons = buttonsOf(env.tg.callsOf('editMessageText').at(-1))
+  await env.bridge.handleUpdate(press(buttons.find((b) => /Other workspace/.test(b.text)).callback_data))
+  await settle(env)
+  assert.match(env.tg.callsOf('editMessageText').at(-1).params.text, /Pick a workspace/)
+  buttons = buttonsOf(env.tg.callsOf('editMessageText').at(-1))
+  await env.bridge.handleUpdate(press(buttons[2].callback_data))
+  await settle(env)
+  buttons = buttonsOf(env.tg.callsOf('editMessageText').at(-1))
+  await env.bridge.handleUpdate(press(buttons.find((b) => /Start without/.test(b.text)).callback_data))
+  await settle(env, 'session-new')
+  assert.deepEqual(env.host.calls.find((call) => call.op === 'newSession'), { op: 'newSession', path: '/home/u/infra', first: undefined })
+  assert.equal(env.host.calls.some((call) => call.op === 'sendInput'), false)
+  assert.ok(env.store.topic('session-new'))
+
+  // A fresh flow cancelled with /cancel; later text is not a prompt.
+  await env.bridge.handleUpdate(generalMessage('/new'))
+  await env.bridge.handleUpdate(generalMessage('/cancel'))
+  assert.match(lastText(env), /Cancelled/)
+  await env.bridge.handleUpdate(generalMessage('not a prompt'))
+  assert.match(lastText(env), /Write inside a session topic/)
+  assert.equal(env.host.calls.filter((call) => call.op === 'newSession').length, 1)
 })
 
 test('General: /new with an unknown workspace explains', async (t) => {
