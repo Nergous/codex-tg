@@ -1,10 +1,10 @@
 window.__ModuleLoader__.load({
-  id: '@nergous/dsh-telegram-bridge',
+  id: '@nergous/dsh-tg-bridge',
   factory(require) {
     const React = require('react')
     const h = React.createElement
 
-    const PKG = '@nergous/dsh-telegram-bridge'
+    const PKG = '@nergous/dsh-tg-bridge'
     const ENTRY = 'telegram-bridge'
     const NS = 'telegram-bridge'
     const CSS_ID = `${PKG}/style`

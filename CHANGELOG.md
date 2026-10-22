@@ -20,13 +20,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   its topic and posts the link, so any DSH session can be continued from
   Telegram.
 
+### Changed
+
+- The project is renamed to `dsh-tg-bridge`: repository
+  `Nergous/dsh-tg-bridge`, npm package `@nergous/dsh-tg-bridge`. The DSH
+  plugin id stays `telegram-bridge`, so settings, the bound group and topics
+  carry over.
+- The Go bridge releases and tags (`v0.1.0`–`v0.1.5`) are removed.
+
 ## [0.2.0] - 2026-10-22
 
 ### Changed
 
 - Rewrite the project as a DeepSeek Harness (DSH) plugin. The Go bridge for
-  the Codex App Server is removed; its last version stays at the
-  `v0.1.5` tag.
+  the Codex App Server is removed.
 
 ### Added
 

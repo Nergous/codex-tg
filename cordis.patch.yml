@@ -1,6 +1,6 @@
 - insert:
     - id: telegram-bridge
-      name: '@nergous/dsh-telegram-bridge'
+      name: '@nergous/dsh-tg-bridge'
       config:
         # Set everything up in Plugins → Telegram bridge. The bot token lives in
         # DSH credentials under `tokenRef`, never in this file.

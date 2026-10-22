@@ -1,16 +1,16 @@
 {
-  "name": "@nergous/dsh-telegram-bridge",
+  "name": "@nergous/dsh-tg-bridge",
   "version": "0.2.0",
   "description": "DeepSeek Harness plugin: every DSH session becomes a Telegram forum topic, mirrored both ways, with approvals, questions, commands, files and voice",
   "license": "MIT",
   "author": "Nergous",
-  "homepage": "https://github.com/Nergous/codex-tg#readme",
+  "homepage": "https://github.com/Nergous/dsh-tg-bridge#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Nergous/codex-tg.git"
+    "url": "git+https://github.com/Nergous/dsh-tg-bridge.git"
   },
   "bugs": {
-    "url": "https://github.com/Nergous/codex-tg/issues"
+    "url": "https://github.com/Nergous/dsh-tg-bridge/issues"
   },
   "publishConfig": {
     "access": "public"

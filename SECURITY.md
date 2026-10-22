@@ -3,8 +3,7 @@
 ## Supported versions
 
 Security fixes target the latest release of the DSH plugin (`0.2.x`) and the
-default branch. The archived Go bridge (`0.1.x`, tag `v0.1.5`)
-is no longer supported.
+default branch. The former Go bridge (`0.1.x`) is no longer supported.
 
 ## Reporting a vulnerability
 

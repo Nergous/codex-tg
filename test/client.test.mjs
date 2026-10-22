@@ -42,7 +42,7 @@ async function loadClient() {
 
 test('client module registers with the package id and the settings page slot', async () => {
   const { module, plugin } = await loadClient()
-  assert.equal(module.id, '@nergous/dsh-telegram-bridge')
+  assert.equal(module.id, '@nergous/dsh-tg-bridge')
   assert.deepEqual(plugin.inject, ['slots', 'locale'])
   const registered = []
   const ctx = {
@@ -65,7 +65,7 @@ test('client module registers with the package id and the settings page slot', a
   plugin.apply(ctx)
   assert.deepEqual(registered[0], ['locale', 'telegram-bridge', ['en']])
   const slots = registered.filter((entry) => entry[0] === 'slot').map((entry) => [entry[1], entry[2]])
-  assert.deepEqual(slots, [['conversation.composer.dock', 'telegram-bridge-topic'], ['plugins.bundle.config', '@nergous/dsh-telegram-bridge']])
+  assert.deepEqual(slots, [['conversation.composer.dock', 'telegram-bridge-topic'], ['plugins.bundle.config', '@nergous/dsh-tg-bridge']])
 })
 
 test('settings page renders all sections and the summary', async () => {

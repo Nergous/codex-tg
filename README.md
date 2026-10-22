@@ -43,8 +43,8 @@ the same conversation.
 ## Install
 
 1. In DSH open **Plugins → Add plugin** and enter one of:
-   - `github:Nergous/codex-tg` (latest from GitHub), or
-   - an absolute path to a local clone, for example `/home/me/projects/codex-tg`.
+   - `github:Nergous/dsh-tg-bridge` (latest from GitHub), or
+   - an absolute path to a local clone, for example `/home/me/projects/dsh-tg-bridge`.
 2. Choose **Enable now**, then open **Plugins → Telegram bridge**.
 
 The plugin has no build step and no dependencies. After changing host code
@@ -236,9 +236,6 @@ node scripts/check-repo.mjs   # syntax, manifest consistency, full test suite
 Tests use an in-process fake Telegram Bot API and fake DSH services; they
 never contact Telegram or a real DSH installation. CI runs the check on Linux
 (Node 22 and 24) and Windows, plus `npm audit`.
-
-The previous Go bridge for the Codex App Server is preserved at the `v0.1.5`
-tag.
 
 ## License
 
