@@ -7,6 +7,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- `/new` in General without arguments shows the workspaces as buttons and
+  then takes your next message (text, photo, file or voice) as the session's
+  first prompt; "Start without a message", "Other workspace" and `/cancel`
+  are available. `/new <workspace>` without a prompt asks for it the same way.
+- The first prompt of a session started from Telegram is echoed at the top of
+  its new topic.
+
 ## [0.2.0] - 2026-10-22
 
 ### Changed
