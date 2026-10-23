@@ -140,6 +140,33 @@ test('a streamed long answer edits one message and ends with answer.md', async (
   assert.equal(env.tg.callsOf('sendDocument').length, 1)
 })
 
+test('answerFileChars raises the file threshold: a long answer below it is sent as several messages', async (t) => {
+  const env = await makeBridge({ settings: { answerFileChars: 100000 } })
+  t.after(env.close)
+  await withTopic(env)
+  const long = Array.from({ length: 400 }, (_, i) => `Line ${i}: ${'lorem ipsum '.repeat(3)}`).join('\n')
+  env.bridge.onAssistantDelta('session-a', 'att-1', long.slice(0, 2000))
+  await settle(env, 'session-a')
+  env.bridge.onAssistantMessage('session-a', { attemptKey: 'att-1', text: long, toolCalls: [] })
+  await settle(env, 'session-a')
+  const sends = env.tg.callsOf('sendMessage')
+  assert.ok(sends.length > 1)
+  assert.ok(sends.every((call) => call.params.text.length <= TELEGRAM_TEXT_LIMIT))
+  assert.match(sends.at(-1).params.text, /Line 399:/)
+  assert.equal(env.tg.callsOf('sendDocument').length, 0)
+})
+
+test('answerFileChars lowers the file threshold, also for final-only answers', async (t) => {
+  const env = await makeBridge({ settings: { answerFileChars: 500, verbosity: 'final' } })
+  t.after(env.close)
+  await withTopic(env)
+  env.bridge.onTurnStarted('session-a')
+  env.bridge.onAssistantMessage('session-a', { text: 'word '.repeat(200), toolCalls: [] })
+  env.bridge.onTurnEnded('session-a', { reason: 'completed' })
+  await settle(env, 'session-a')
+  assert.equal(env.tg.callsOf('sendDocument')[0].params.document.name, 'answer.md')
+})
+
 test('a short final-only answer stays a message', async (t) => {
   const env = await makeBridge({ settings: { verbosity: 'final' } })
   t.after(env.close)

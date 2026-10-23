@@ -144,8 +144,10 @@ desktop и `dsh web` с этим плагином, Telegram ответит `409 
 | Stream answers live | вкл | Редактировать одно сообщение по мере генерации. Выкл — ответ приходит целиком. |
 | Notify when a turn ends | вкл | Строка `✅ Done` со звуком; всё остальное — без звука. |
 | Show "typing…" while working | вкл | Индикатор «печатает…» во время хода. |
+| React 👀 / ⚡ when a message is delivered | вкл | Реакция на ваше сообщение после доставки: 👀 в очередь, ⚡ steer. |
 | Mirror my DSH messages | вкл | Показывать в топике сообщения, написанные в DSH. |
 | Pinned status card per topic | вкл | Закреплять первое сообщение топика. |
+| Send answer.md above, characters | 3400 | Ответ длиннее — превью и `answer.md`; короче — одним или несколькими сообщениями. |
 
 **Topics**
 

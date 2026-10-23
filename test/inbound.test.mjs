@@ -17,7 +17,6 @@ test('text in a topic goes to that topic session as a queued prompt', async (t) 
   assert.equal(send.id, 'session-b')
   assert.equal(send.input.text, 'run the tests')
   assert.equal(send.options.mode, 'followup')
-  assert.equal(env.tg.callsOf('setMessageReaction').length, 0, 'no read reactions')
 })
 
 test('the steer prefix steers the running turn', async (t) => {
@@ -62,7 +61,7 @@ test('a delivery failure is reported in the topic', async (t) => {
   assert.match(env.tg.callsOf('sendMessage')[0].params.text, /Not delivered: session\/agent-busy/)
 })
 
-test('no reactions are set on inbound messages, at delivery or at turn end', async (t) => {
+test('delivered messages get a read reaction: 👀 for queued, ⚡ for steer, none at turn end', async (t) => {
   const env = await makeBridge()
   t.after(env.close)
   await bound(env)
@@ -71,6 +70,17 @@ test('no reactions are set on inbound messages, at delivery or at turn end', asy
   env.bridge.onTurnStarted('session-a')
   env.bridge.onTurnEnded('session-a', { reason: 'completed' })
   await settle(env, 'session-a')
+  assert.deepEqual(env.tg.callsOf('setMessageReaction').map((call) => call.params.reaction[0].emoji), ['👀', '⚡'])
+})
+
+test('read reactions can be turned off in settings', async (t) => {
+  const env = await makeBridge({ settings: { readReactions: false } })
+  t.after(env.close)
+  await bound(env)
+  await env.bridge.handleUpdate(topicMessage(300, 'go'))
+  await env.bridge.handleUpdate(topicMessage(300, '!faster'))
+  await settle(env, 'session-a')
+  assert.equal(env.host.calls.filter((call) => call.op === 'sendInput').length, 2)
   assert.equal(env.tg.callsOf('setMessageReaction').length, 0)
 })
 

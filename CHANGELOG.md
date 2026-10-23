@@ -19,6 +19,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   to it, and a session without one gets a button that creates (or reopens)
   its topic and posts the link, so any DSH session can be continued from
   Telegram.
+- Read reactions are back as an option: a delivered message gets 👀 (queued)
+  or ⚡ (steer). Turn off with "React 👀 / ⚡ when a message is delivered".
+- "Send answer.md above, characters" sets when an answer goes as a preview
+  plus `answer.md` (default 3400); shorter answers that do not fit one
+  message are split into several messages.
 
 ## [0.2.0] - 2026-10-22
 

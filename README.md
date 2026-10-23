@@ -145,8 +145,10 @@ All settings live on the plugin's settings page and apply without a restart.
 | Stream answers live | on | Edit one message while the model writes. Off sends the answer when it is complete. |
 | Notify when a turn ends | on | `✅ Done` line with sound. Everything else is silent. |
 | Show "typing…" while working | on | Telegram typing indicator during a turn. |
+| React 👀 / ⚡ when a message is delivered | on | Read reaction on your message: 👀 queued, ⚡ steer. |
 | Mirror my DSH messages | on | Show messages typed in DSH in the topic. |
 | Pinned status card per topic | on | Pin the topic's first message. |
+| Send answer.md above, characters | 3400 | Longer answers come as a preview plus `answer.md`; shorter ones as one or more messages. |
 
 **Topics**
 
