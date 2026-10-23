@@ -112,12 +112,13 @@ documents.
 | `/diff` | `git diff --stat` of the session's directory, full patch as a file. |
 | `/compact` | Compact the conversation (when the session is idle). |
 | `/model [name]` | Show models as buttons, or switch to one by name. |
-| `/verbosity full\|tools\|final` | Output detail for this topic only. |
+| `/permission [ro\|write\|full]` | Show access (Read Only, Workspace Write, Full Access) as buttons, or switch. Alias `/access`. New sessions: `/new --ro\|--write\|--full <workspace> [prompt]`, or the buttons in the `/new` picker. |
+| `/verbosity full\|tools\|final` | Output detail for this topic only. Answers longer than one message arrive as a preview plus `answer.md`. |
 | `/mute`, `/unmute` | Pause or resume agent output in this topic. Approvals and questions still arrive. |
 | `/steer <text>` | Same as `!text`. |
 | `/help` | Command list. |
 
-Other DSH slash commands, such as `/goal` or `/permission`, run through the
+Other DSH slash commands, such as `/goal`, run through the
 DSH command registry like in the composer. Unknown slash text is sent to the
 session as a message.
 

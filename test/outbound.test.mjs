@@ -106,7 +106,7 @@ test('text, tools, text keep their order as separate messages', async (t) => {
   assert.deepEqual(order, ['first', 'tools', 'second'])
 })
 
-test('a long answer is split into several messages within the Telegram limit', async (t) => {
+test('a long answer becomes one preview message plus answer.md', async (t) => {
   const env = await makeBridge()
   t.after(env.close)
   await withTopic(env)
@@ -114,8 +114,42 @@ test('a long answer is split into several messages within the Telegram limit', a
   env.bridge.onAssistantMessage('session-a', { text: long, toolCalls: [] })
   await settle(env, 'session-a')
   const sends = env.tg.callsOf('sendMessage')
-  assert.ok(sends.length >= 3)
-  for (const call of sends) assert.ok(call.params.text.length <= TELEGRAM_TEXT_LIMIT)
+  assert.equal(sends.length, 1)
+  assert.ok(sends[0].params.text.length <= TELEGRAM_TEXT_LIMIT)
+  assert.match(sends[0].params.text, /^Line 0:[\s\S]*Full answer in answer\.md/)
+  const docs = env.tg.callsOf('sendDocument')
+  assert.equal(docs.length, 1)
+  assert.equal(docs[0].params.document.name, 'answer.md')
+  assert.equal(docs[0].params.document.size, Buffer.byteLength(long.trim()))
+})
+
+test('a streamed long answer edits one message and ends with answer.md', async (t) => {
+  const env = await makeBridge()
+  t.after(env.close)
+  await withTopic(env)
+  const long = Array.from({ length: 400 }, (_, i) => `Line ${i}: ${'lorem ipsum '.repeat(3)}`).join('\n')
+  env.bridge.onAssistantDelta('session-a', 'att-1', long.slice(0, 2000))
+  await settle(env, 'session-a')
+  env.bridge.onAssistantDelta('session-a', 'att-1', long)
+  await sleep(150)
+  await settle(env, 'session-a')
+  env.bridge.onAssistantMessage('session-a', { attemptKey: 'att-1', text: long, toolCalls: [] })
+  await settle(env, 'session-a')
+  assert.equal(env.tg.callsOf('sendMessage').length, 1)
+  assert.match(env.tg.callsOf('editMessageText').at(-1).params.text, /Full answer in answer\.md<\/i>$/)
+  assert.equal(env.tg.callsOf('sendDocument').length, 1)
+})
+
+test('a short final-only answer stays a message', async (t) => {
+  const env = await makeBridge({ settings: { verbosity: 'final' } })
+  t.after(env.close)
+  await withTopic(env)
+  env.bridge.onTurnStarted('session-a')
+  env.bridge.onAssistantMessage('session-a', { text: 'short **one**', toolCalls: [] })
+  env.bridge.onTurnEnded('session-a', { reason: 'completed' })
+  await settle(env, 'session-a')
+  assert.ok(env.tg.callsOf('sendMessage').some((call) => call.params.text === 'short <b>one</b>'))
+  assert.equal(env.tg.callsOf('sendDocument').length, 0)
 })
 
 test('subagent shows one line that is edited when it finishes', async (t) => {

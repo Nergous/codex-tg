@@ -174,6 +174,7 @@ export const BOT_COMMANDS = [
   { command: 'diff', description: 'Uncommitted changes' },
   { command: 'compact', description: 'Compact the conversation' },
   { command: 'model', description: 'Show or switch the model' },
+  { command: 'permission', description: 'Access: Read Only, Workspace Write, Full Access' },
   { command: 'verbosity', description: 'Output detail: full, tools, final' },
   { command: 'mute', description: 'Pause mirroring in this topic' },
   { command: 'unmute', description: 'Resume mirroring in this topic' },

@@ -45,14 +45,26 @@ export function fakeHost(extra = {}) {
       calls.push({ op: 'setModel', id, target })
       return target === 'p/m2' || target === 'm2' ? 'Model Two' : 'Model One'
     },
+    permission: 'workspace-write',
+    async permissions() {
+      return {
+        options: [{ value: 'read-only', name: 'read-only' }, { value: 'workspace-write', name: 'workspace-write' }, { value: 'danger-full-access', name: 'danger-full-access' }],
+        current: host.permission,
+      }
+    },
+    async setPermission(id, preset) {
+      calls.push({ op: 'setPermission', id, preset })
+      host.permission = preset
+      return preset
+    },
     async listSessions() {
       return [...sessions.entries()].map(([sessionId, info]) => ({ sessionId, title: info.title, workspaceTitle: info.workspaceTitle, running: false }))
     },
     async listWorkspaces() {
       return [{ id: 'ws1', title: 'codex-tg', path: '/home/u/codex-tg' }]
     },
-    async newSession(path, first) {
-      calls.push({ op: 'newSession', path, first })
+    async newSession(path, first, options) {
+      calls.push({ op: 'newSession', path, first, ...options })
       sessions.set('session-new', { cwd: path, workspaceTitle: 'codex-tg', title: '' })
       return 'session-new'
     },

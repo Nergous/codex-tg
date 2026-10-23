@@ -76,6 +76,29 @@ test('/model <name> switches directly', async (t) => {
   assert.deepEqual(env.host.calls.at(-1), { op: 'setModel', id: 'session-a', target: 'm2' })
 })
 
+test('/permission shows access buttons; a press switches the session', async (t) => {
+  const env = await env0(t)
+  await env.bridge.handleUpdate(topicMessage(300, '/permission'))
+  const call = env.tg.callsOf('sendMessage').at(-1)
+  assert.match(call.params.text, /Access: <b>✏️ Workspace Write<\/b>/)
+  const buttons = call.params.reply_markup.inline_keyboard.flat()
+  assert.deepEqual(buttons.map((b) => b.text), ['👁 Read Only', '✏️ Workspace Write ✓', '⚠️ Full Access'])
+  await env.bridge.handleUpdate({ callback_query: { id: 'cb-p', from: { id: OWNER }, message: { message_id: 1, chat: { id: CHAT } }, data: buttons[0].callback_data } })
+  assert.deepEqual(env.host.calls.at(-1), { op: 'setPermission', id: 'session-a', preset: 'read-only' })
+  await settle(env)
+  assert.match(lastText(env), /Access set to <b>👁 Read Only<\/b>/)
+})
+
+test('/access <alias> switches directly; unknown names are explained', async (t) => {
+  const env = await env0(t)
+  await env.bridge.handleUpdate(topicMessage(300, '/access full'))
+  assert.deepEqual(env.host.calls.at(-1), { op: 'setPermission', id: 'session-a', preset: 'danger-full-access' })
+  await env.bridge.handleUpdate(topicMessage(300, '/permission Workspace Write'))
+  assert.deepEqual(env.host.calls.at(-1), { op: 'setPermission', id: 'session-a', preset: 'workspace-write' })
+  await env.bridge.handleUpdate(topicMessage(300, '/permission root'))
+  assert.match(lastText(env), /Unknown access/)
+})
+
 test('/verbosity changes the per-topic output mode', async (t) => {
   const env = await env0(t)
   await env.bridge.handleUpdate(topicMessage(300, '/verbosity final'))
@@ -293,6 +316,32 @@ test('General: /new flow can start empty, go back, cancel, and ignores other use
   await env.bridge.handleUpdate(generalMessage('not a prompt'))
   assert.match(lastText(env), /Write inside a session topic/)
   assert.equal(env.host.calls.filter((call) => call.op === 'newSession').length, 1)
+})
+
+test('General: /new --full <workspace> <prompt> starts the session with that access', async (t) => {
+  const env = await env0(t)
+  env.host.listWorkspaces = async () => WORKSPACES
+  await env.bridge.handleUpdate(generalMessage('/new --full site deploy it'))
+  await settle(env, 'session-new')
+  assert.deepEqual(env.host.calls.find((call) => call.op === 'newSession'), { op: 'newSession', path: '/home/u/site', first: undefined, permission: 'danger-full-access' })
+  assert.equal(env.host.calls.find((call) => call.op === 'sendInput').input.text, 'deploy it')
+  await env.bridge.handleUpdate(generalMessage('/new site --root x'))
+  assert.match(lastText(env), /Unknown access/)
+})
+
+test('General: the /new picker offers access buttons before the first message', async (t) => {
+  const env = await env0(t)
+  env.host.listWorkspaces = async () => WORKSPACES
+  await env.bridge.handleUpdate(generalMessage('/new infra'))
+  const picker = env.tg.callsOf('sendMessage').at(-1)
+  assert.match(picker.params.text, /Access: <b>DSH default<\/b>/)
+  const ro = buttonsOf(picker).find((b) => /Read Only/.test(b.text))
+  await env.bridge.handleUpdate(press(ro.callback_data))
+  await settle(env)
+  assert.match(env.tg.callsOf('editMessageText').at(-1).params.text, /Access: <b>👁 Read Only<\/b>/)
+  await env.bridge.handleUpdate(generalMessage('look around'))
+  await settle(env, 'session-new')
+  assert.equal(env.host.calls.find((call) => call.op === 'newSession').permission, 'read-only')
 })
 
 test('General: /new with an unknown workspace explains', async (t) => {

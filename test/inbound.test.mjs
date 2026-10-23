@@ -17,8 +17,7 @@ test('text in a topic goes to that topic session as a queued prompt', async (t) 
   assert.equal(send.id, 'session-b')
   assert.equal(send.input.text, 'run the tests')
   assert.equal(send.options.mode, 'followup')
-  const reaction = env.tg.callsOf('setMessageReaction')[0]
-  assert.equal(reaction.params.reaction[0].emoji, '👀')
+  assert.equal(env.tg.callsOf('setMessageReaction').length, 0, 'no read reactions')
 })
 
 test('the steer prefix steers the running turn', async (t) => {
@@ -63,17 +62,16 @@ test('a delivery failure is reported in the topic', async (t) => {
   assert.match(env.tg.callsOf('sendMessage')[0].params.text, /Not delivered: session\/agent-busy/)
 })
 
-test('the turn-end reaction lands on the message that started it', async (t) => {
+test('no reactions are set on inbound messages, at delivery or at turn end', async (t) => {
   const env = await makeBridge()
   t.after(env.close)
   await bound(env)
-  const update = topicMessage(300, 'go')
-  await env.bridge.handleUpdate(update)
+  await env.bridge.handleUpdate(topicMessage(300, 'go'))
+  await env.bridge.handleUpdate(topicMessage(300, '!faster'))
   env.bridge.onTurnStarted('session-a')
   env.bridge.onTurnEnded('session-a', { reason: 'completed' })
   await settle(env, 'session-a')
-  const reactions = env.tg.callsOf('setMessageReaction').map((call) => [call.params.message_id, call.params.reaction[0].emoji])
-  assert.deepEqual(reactions, [[update.message.message_id, '👀'], [update.message.message_id, '👌']])
+  assert.equal(env.tg.callsOf('setMessageReaction').length, 0)
 })
 
 test('/bind with the code from DSH binds a forum supergroup and allows the sender', async (t) => {
