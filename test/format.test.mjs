@@ -71,8 +71,8 @@ test('renderMarkdownMessages never exceeds the Telegram limit even with entity g
 })
 
 test('topicName joins workspace and title within 128 chars', () => {
-  assert.equal(topicName('codex-tg', 'Fix login'), 'codex-tg · Fix login')
-  assert.equal(topicName('codex-tg', ''), 'codex-tg')
+  assert.equal(topicName('dsh-tg-bridge', 'Fix login'), 'dsh-tg-bridge · Fix login')
+  assert.equal(topicName('dsh-tg-bridge', ''), 'dsh-tg-bridge')
   assert.ok(topicName('w'.repeat(100), 't'.repeat(200)).length <= 128)
   assert.equal(truncate('abcdef', 4), 'abc…')
 })

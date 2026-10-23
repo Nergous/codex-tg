@@ -61,11 +61,11 @@ export function fakeHost(extra = {}) {
       return [...sessions.entries()].map(([sessionId, info]) => ({ sessionId, title: info.title, workspaceTitle: info.workspaceTitle, running: false }))
     },
     async listWorkspaces() {
-      return [{ id: 'ws1', title: 'codex-tg', path: '/home/u/codex-tg' }]
+      return [{ id: 'ws1', title: 'dsh-tg-bridge', path: '/home/u/dsh-tg-bridge' }]
     },
     async newSession(path, first, options) {
       calls.push({ op: 'newSession', path, first, ...options })
-      sessions.set('session-new', { cwd: path, workspaceTitle: 'codex-tg', title: '' })
+      sessions.set('session-new', { cwd: path, workspaceTitle: 'dsh-tg-bridge', title: '' })
       return 'session-new'
     },
     async readFile(id, path) {
@@ -164,6 +164,6 @@ export function fakeCtx(services = {}) {
 }
 
 export function fakeSession(id, header = {}) {
-  return { id, header: { cwd: '/home/u/codex-tg', ...header } }
+  return { id, header: { cwd: '/home/u/dsh-tg-bridge', ...header } }
 }
 

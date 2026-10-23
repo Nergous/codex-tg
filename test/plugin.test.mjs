@@ -85,7 +85,7 @@ test('end to end: DSH session events reach the topic and topic text reaches sess
   await tg.waitFor((calls) => calls.some((call) => call.method === 'sendMessage' && /✅ Done/.test(call.params.text)), 8000)
   const topic = tg.callsOf('createForumTopic')
   assert.equal(topic.length, 1)
-  assert.equal(topic[0].params.name, 'codex-tg · Title of session-a')
+  assert.equal(topic[0].params.name, 'dsh-tg-bridge · Title of session-a')
   const thread = 101
   const texts = tg.calls.filter((call) => ['sendMessage', 'editMessageText'].includes(call.method)).map((call) => call.params.text)
   assert.ok(texts.some((text) => /👤.*\n?Fix the login bug/s.test(text)))

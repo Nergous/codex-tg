@@ -43,8 +43,8 @@
 ## Установка
 
 1. В DSH откройте **Plugins → Add plugin** и введите:
-   - `github:Nergous/codex-tg`, или
-   - абсолютный путь к локальному клону, например `/home/me/projects/codex-tg`.
+   - `github:Nergous/dsh-tg-bridge`, или
+   - абсолютный путь к локальному клону, например `/home/me/projects/dsh-tg-bridge`.
 2. Нажмите **Enable now**, затем откройте **Plugins → Telegram bridge**.
 
 У плагина нет сборки и зависимостей. После изменения кода хоста (`index.js`,

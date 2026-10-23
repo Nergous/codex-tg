@@ -6,7 +6,7 @@
 import { Readable } from 'node:stream'
 import { memoryDomain } from '../lib/store.js'
 
-export function createFakeDsh({ token, workspaces = [{ id: 'ws1', title: 'codex-tg', path: '/home/u/codex-tg', sessionIds: ['session-a'] }] } = {}) {
+export function createFakeDsh({ token, workspaces = [{ id: 'ws1', title: 'dsh-tg-bridge', path: '/home/u/dsh-tg-bridge', sessionIds: ['session-a'] }] } = {}) {
   const hooks = new Map()
   const disposers = []
   const routes = new Map()
@@ -18,7 +18,7 @@ export function createFakeDsh({ token, workspaces = [{ id: 'ws1', title: 'codex-
   const logs = []
 
   const addSession = (id, header = {}) => {
-    const session = { id, header: { cwd: '/home/u/codex-tg', ...header }, eventAt: () => undefined }
+    const session = { id, header: { cwd: '/home/u/dsh-tg-bridge', ...header }, eventAt: () => undefined }
     sessions.set(id, session)
     const agent = { id, session, status: 'idle', cancelled: [] }
     agent.cancel = (cause, options) => agent.cancelled.push([cause, options])

@@ -6,7 +6,7 @@ async function env0(t, options) {
   const env = await makeBridge(options)
   t.after(env.close)
   await env.store.putTopic('session-a', { chatId: CHAT, threadId: 300, name: 'ws · t', closed: false })
-  env.host.sessions.set('session-a', { cwd: '/home/u/codex-tg', workspaceTitle: 'codex-tg', title: 'Fix login', model: 'Model One', modelId: 'p/m1' })
+  env.host.sessions.set('session-a', { cwd: '/home/u/dsh-tg-bridge', workspaceTitle: 'dsh-tg-bridge', title: 'Fix login', model: 'Model One', modelId: 'p/m1' })
   return env
 }
 
@@ -27,7 +27,7 @@ test('/status shows workspace, model, context and output mode', async (t) => {
   const env = await env0(t)
   await env.bridge.handleUpdate(topicMessage(300, '/status@fake_bot'))
   const text = lastText(env)
-  assert.match(text, /codex-tg/)
+  assert.match(text, /dsh-tg-bridge/)
   assert.match(text, /Model One/)
   assert.match(text, /Context: 12\.0k \/ 200\.0k/)
   assert.match(text, /Output: tools/)
@@ -158,19 +158,19 @@ test('General: /help and /workspaces', async (t) => {
   await env.bridge.handleUpdate(generalMessage('/help'))
   assert.match(lastText(env), /\/sessions/)
   await env.bridge.handleUpdate(generalMessage('/workspaces'))
-  assert.match(lastText(env), /codex-tg.*\/home\/u\/codex-tg/)
+  assert.match(lastText(env), /dsh-tg-bridge.*\/home\/u\/dsh-tg-bridge/)
 })
 
 test('General: /sessions links sessions with a topic and creates a topic for one without', async (t) => {
   const env = await env0(t)
-  env.host.sessions.set('session-old', { cwd: '/home/u/codex-tg', workspaceTitle: 'codex-tg', title: 'Old refactor' })
+  env.host.sessions.set('session-old', { cwd: '/home/u/dsh-tg-bridge', workspaceTitle: 'dsh-tg-bridge', title: 'Old refactor' })
   await env.bridge.handleUpdate(generalMessage('/sessions'))
   const list = env.tg.callsOf('sendMessage').at(-1)
   assert.match(list.params.text, /Recent sessions/)
   const rows = list.params.reply_markup.inline_keyboard.map((row) => row[0])
   const linked = rows.find((b) => /Fix login/.test(b.text))
   assert.equal(linked.url, 'https://t.me/c/1234567890/300', 'a session with a topic opens it directly')
-  assert.match(linked.text, /^🧵 Fix login · codex-tg/)
+  assert.match(linked.text, /^🧵 Fix login · dsh-tg-bridge/)
   const missing = rows.find((b) => /Old refactor/.test(b.text))
   assert.equal(missing.url, undefined)
   assert.match(missing.text, /^➕ /)
@@ -208,9 +208,9 @@ test('General: /sessions reopens a closed topic instead of linking to it', async
 
 test('General: /new starts a session in a workspace with a first prompt and opens its topic', async (t) => {
   const env = await env0(t)
-  await env.bridge.handleUpdate(generalMessage('/new codex write a README'))
+  await env.bridge.handleUpdate(generalMessage('/new dsh write a README'))
   const created = env.host.calls.find((call) => call.op === 'newSession')
-  assert.deepEqual(created, { op: 'newSession', path: '/home/u/codex-tg', first: undefined })
+  assert.deepEqual(created, { op: 'newSession', path: '/home/u/dsh-tg-bridge', first: undefined })
   const input = env.host.calls.find((call) => call.op === 'sendInput')
   assert.equal(input.id, 'session-new')
   assert.equal(input.input.text, 'write a README')
@@ -218,11 +218,11 @@ test('General: /new starts a session in a workspace with a first prompt and open
   assert.equal(env.tg.callsOf('createForumTopic').length, 1)
   const thread = env.store.topic('session-new').threadId
   assert.ok(env.tg.callsOf('sendMessage').some((call) => call.params.message_thread_id === thread && /You \(Telegram\)<\/b>\nwrite a README/.test(call.params.text)), 'the prompt is echoed in the new topic')
-  assert.ok(env.tg.callsOf('sendMessage').some((call) => /Session started in <b>codex-tg<\/b>.*open topic/.test(call.params.text)))
+  assert.ok(env.tg.callsOf('sendMessage').some((call) => /Session started in <b>dsh-tg-bridge<\/b>.*open topic/.test(call.params.text)))
 })
 
 const WORKSPACES = [
-  { id: 'ws1', title: 'codex-tg', path: '/home/u/codex-tg' },
+  { id: 'ws1', title: 'dsh-tg-bridge', path: '/home/u/dsh-tg-bridge' },
   { id: 'ws2', title: 'site', path: '/home/u/site' },
   { id: 'ws3', title: 'infra', path: '/home/u/infra' },
 ]
@@ -240,7 +240,7 @@ test('General: /new without arguments lists workspaces as buttons, then takes th
   const picker = env.tg.callsOf('sendMessage').at(-1)
   assert.match(picker.params.text, /Pick a workspace/)
   const buttons = buttonsOf(picker)
-  assert.deepEqual(buttons.map((b) => b.text), ['codex-tg', 'site', 'infra', '✖ Cancel'])
+  assert.deepEqual(buttons.map((b) => b.text), ['dsh-tg-bridge', 'site', 'infra', '✖ Cancel'])
   assert.equal(env.host.calls.some((call) => call.op === 'newSession'), false, 'nothing starts before a choice')
 
   await env.bridge.handleUpdate(press(buttons[1].callback_data))
